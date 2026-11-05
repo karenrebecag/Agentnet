@@ -22,4 +22,8 @@ El túnel no arranca. Si alguien pone `Enabled` y el binario no está, sale con 
 
 ## Abierto
 
-Bearer o OAuth queda sin cerrar hasta el research. Los cupos no sobreviven un reinicio si nadie llama `Restore`. Windows no tiene este lock.
+Bearer o OAuth queda sin cerrar. Los cupos no sobreviven un reinicio si nadie llama `Restore`. Windows no tiene este lock.
+
+El release por tag arma binarios, checksums y SBOM, y firma la procedencia con attestation de GitHub. No hay llave GPG en el repo. No publica fórmula de Homebrew: el tap no existe y el token del workflow no puede escribir otro repositorio.
+
+Los jobs de Actions de esta cuenta no arrancan mientras el límite de gasto esté bloqueado. El workflow escrito no es evidencia de que corrió.

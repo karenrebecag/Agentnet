@@ -11,3 +11,9 @@ La auditoría guarda hora, invitado, acción, resultado y tamaño. No guarda el 
 El lock es `flock` y cubre el append entero. En Windows ese lock no está. Este corte es Unix.
 
 El escaneo de CI busca el prefijo de un home y direcciones de correo. No lleva una lista de identificadores reales.
+
+## Reportar una vulnerabilidad
+
+No abras un issue publico. El reporte privado de este repositorio está activo. Usa Advisories, Report a vulnerability:
+
+https://github.com/karenrebecag/agentnet/security/advisories/new
