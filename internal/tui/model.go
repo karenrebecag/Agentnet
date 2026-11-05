@@ -7,22 +7,51 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/karenrebecag/agentnet/internal/core"
 )
 
-const pollEvery = 500 * time.Millisecond
+const (
+	pollEvery   = 500 * time.Millisecond
+	agentRowsUI = 6
+)
 
 var (
 	title    = lipgloss.NewStyle().Bold(true)
 	dim      = lipgloss.NewStyle().Faint(true)
-	live     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	external = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	alert    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
 	panel    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 )
+
+type keyMap struct {
+	Up, Down, Top, Bottom, Follow, Clear, Help, Quit key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Follow, k.Help, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{{k.Up, k.Down, k.Top, k.Bottom}, {k.Follow, k.Clear, k.Help, k.Quit}}
+}
+
+var keys = keyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "scroll up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "scroll down")),
+	Top:    key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "oldest")),
+	Bottom: key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "newest")),
+	Follow: key.NewBinding(key.WithKeys("f", " "), key.WithHelp("f", "follow on/off")),
+	Clear:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear")),
+	Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "more keys")),
+	Quit:   key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
+}
 
 type tickMsg time.Time
 
@@ -35,15 +64,38 @@ type Model struct {
 	feed   *Feed
 	snap   Snapshot
 	events []core.Envelope
-	paused bool
-	frozen int
+	agents table.Model
+	log    viewport.Model
+	help   help.Model
+	follow bool
 	err    error
 	width  int
 	height int
+	ready  bool
 }
 
 func New(feed *Feed) Model {
-	return Model{feed: feed}
+	agents := table.New(
+		table.WithColumns(agentColumns(60)),
+		table.WithHeight(agentRowsUI),
+		table.WithFocused(false),
+	)
+	styles := table.DefaultStyles()
+	styles.Header = styles.Header.Bold(true).BorderStyle(lipgloss.NormalBorder()).BorderBottom(true)
+	styles.Selected = lipgloss.NewStyle()
+	agents.SetStyles(styles)
+	return Model{feed: feed, agents: agents, help: help.New(), follow: true}
+}
+
+func agentColumns(width int) []table.Column {
+	name := max(14, width-44)
+	return []table.Column{
+		{Title: "", Width: 1},
+		{Title: "agent", Width: name},
+		{Title: "kind", Width: 8},
+		{Title: "unread", Width: 7},
+		{Title: "guests", Width: 7},
+	}
 }
 
 func (m Model) poll() tea.Cmd {
@@ -62,83 +114,118 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		switch {
+		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
-		case "p", " ":
-			m.paused = !m.paused
-			m.frozen = len(m.events)
-		case "c":
-			m.events, m.frozen = nil, 0
+		case key.Matches(msg, keys.Follow):
+			m.follow = !m.follow
+			if m.follow {
+				m.log.GotoBottom()
+			}
+			return m, nil
+		case key.Matches(msg, keys.Clear):
+			m.events = nil
+			m.refreshLog()
+			return m, nil
+		case key.Matches(msg, keys.Help):
+			m.help.ShowAll = !m.help.ShowAll
+			m.layout()
+			return m, nil
+		case key.Matches(msg, keys.Top):
+			m.follow = false
+			m.log.GotoTop()
+			return m, nil
+		case key.Matches(msg, keys.Bottom):
+			m.follow = true
+			m.log.GotoBottom()
+			return m, nil
+		case key.Matches(msg, keys.Up):
+			m.follow = false
 		}
+		m.log, cmd = m.log.Update(msg)
+		if m.log.AtBottom() {
+			m.follow = true
+		}
+		return m, cmd
+	case tea.MouseMsg:
+		m.log, cmd = m.log.Update(msg)
+		m.follow = m.log.AtBottom()
+		return m, cmd
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.layout()
 	case tickMsg:
 		return m, tea.Batch(m.poll(), tick())
 	case pollMsg:
 		m.err = msg.err
 		m.snap.Agents, m.snap.Pending = msg.snap.Agents, msg.snap.Pending
-		// While paused the feed keeps its offsets, so new messages are kept,
-		// only the screen stops scrolling.
-		m.events = append(m.events, msg.snap.New...)
-		if len(m.events) > MaxEvents {
-			drop := len(m.events) - MaxEvents
-			m.events = m.events[drop:]
-			m.frozen = max(0, m.frozen-drop)
+		m.agents.SetRows(agentRows(m.snap.Agents))
+		if len(msg.snap.New) > 0 {
+			m.events = append(m.events, msg.snap.New...)
+			if len(m.events) > MaxEvents {
+				m.events = m.events[len(m.events)-MaxEvents:]
+			}
+			m.refreshLog()
 		}
 	}
 	return m, nil
 }
 
-func (m Model) agentsView() string {
-	var b strings.Builder
-	b.WriteString(title.Render("agents") + "\n")
-	if len(m.snap.Agents) == 0 {
-		b.WriteString(dim.Render("none joined yet") + "\n")
-	}
-	for _, a := range m.snap.Agents {
-		dot := dim.Render("○")
+func agentRows(agents []AgentRow) []table.Row {
+	rows := make([]table.Row, 0, len(agents))
+	for _, a := range agents {
+		dot := "○"
 		if a.Live {
-			dot = live.Render("●")
+			dot = "●"
 		}
-		line := fmt.Sprintf("%s %-18s %-7s", dot, a.Name, a.Kind)
+		unread := ""
 		if a.Unread > 0 {
-			line += fmt.Sprintf(" %d unread", a.Unread)
+			unread = fmt.Sprint(a.Unread)
 		}
+		ext := ""
 		if a.External {
-			line += " " + external.Render("ext")
+			ext = "open"
 		}
-		b.WriteString(line + "\n")
+		rows = append(rows, table.Row{dot, a.Name, a.Kind, unread, ext})
 	}
-	if len(m.snap.Pending) > 0 {
-		b.WriteString("\n" + alert.Render("pending guests: "+strings.Join(m.snap.Pending, ", ")) + "\n")
-		b.WriteString(dim.Render("agentnet guests approve <name>") + "\n")
-	}
-	return b.String()
+	return rows
 }
 
-func oneLine(s string, width int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if width > 1 && len([]rune(s)) > width {
-		return string([]rune(s)[:width-1]) + "…"
+func (m *Model) layout() {
+	width := max(m.width, 60)
+	m.agents.SetColumns(agentColumns(width - 4))
+	m.agents.SetWidth(width - 4)
+	m.help.Width = width
+	fixed := lipgloss.Height(m.header()) + agentRowsUI + 4 + 2 + lipgloss.Height(m.footer())
+	height := max(3, m.height-fixed)
+	if !m.ready {
+		m.log = viewport.New(width-4, height)
+		m.ready = true
+	} else {
+		m.log.Width, m.log.Height = width-4, height
 	}
-	return s
+	m.refreshLog()
 }
 
-func (m Model) feedView(rows, width int) string {
-	var b strings.Builder
-	state := ""
-	if m.paused {
-		state = dim.Render("  (paused)")
+func (m *Model) refreshLog() {
+	if !m.ready {
+		return
 	}
-	b.WriteString(title.Render("activity") + state + "\n")
-	shown := m.events
-	if m.paused {
-		shown = m.events[:min(m.frozen, len(m.events))]
+	m.log.SetContent(m.renderEvents(m.log.Width))
+	if m.follow {
+		m.log.GotoBottom()
 	}
-	for _, e := range shown[max(0, len(shown)-rows):] {
+}
+
+func (m Model) renderEvents(width int) string {
+	if len(m.events) == 0 {
+		return dim.Render("no messages yet")
+	}
+	lines := make([]string, 0, len(m.events))
+	for _, e := range m.events {
 		ts := e.TS
 		if t, err := time.Parse(time.RFC3339, e.TS); err == nil {
 			ts = t.Local().Format("15:04:05")
@@ -149,23 +236,51 @@ func (m Model) feedView(rows, width int) string {
 			tag = external.Render("[ext] ")
 		}
 		used := lipgloss.Width(head) + lipgloss.Width(tag)
-		b.WriteString(head + tag + oneLine(e.Text, width-used) + "\n")
+		lines = append(lines, head+tag+oneLine(e.Text, width-used))
 	}
-	if len(m.events) == 0 {
-		b.WriteString(dim.Render("no messages yet") + "\n")
+	return strings.Join(lines, "\n")
+}
+
+func oneLine(s string, width int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if width > 1 && len([]rune(s)) > width {
+		return string([]rune(s)[:width-1]) + "…"
 	}
-	return b.String()
+	return s
+}
+
+func (m Model) header() string {
+	live := 0
+	for _, a := range m.snap.Agents {
+		if a.Live {
+			live++
+		}
+	}
+	line := title.Render("agentnet watch") + dim.Render(fmt.Sprintf("  %d agents, %d live", len(m.snap.Agents), live))
+	if len(m.snap.Pending) > 0 {
+		line += "  " + alert.Render("pending guests: "+strings.Join(m.snap.Pending, ", ")+" (agentnet guests approve <name>)")
+	}
+	return line
+}
+
+func (m Model) footer() string {
+	state := dim.Render("following")
+	if !m.follow {
+		state = dim.Render("paused, scrolled back")
+	}
+	out := state + "  " + m.help.View(keys)
+	if m.err != nil {
+		out = alert.Render(m.err.Error()) + "  " + out
+	}
+	return out
 }
 
 func (m Model) View() string {
-	width := max(m.width, 60)
-	height := max(m.height, 12)
-	agents := panel.Render(m.agentsView())
-	feedRows := max(3, height-lipgloss.Height(agents)-6)
-	feed := panel.Width(width - 2).Render(m.feedView(feedRows, width-6))
-	footer := dim.Render("q quit · p pause · c clear · read-only: cursors are never moved")
-	if m.err != nil {
-		footer = alert.Render(m.err.Error()) + "  " + footer
+	if !m.ready {
+		return "loading…"
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, title.Render("agentnet watch"), agents, feed, footer)
+	width := max(m.width, 60)
+	agents := panel.Width(width - 2).Render(m.agents.View())
+	activity := panel.Width(width - 2).Render(title.Render("activity") + "\n" + m.log.View())
+	return lipgloss.JoinVertical(lipgloss.Left, m.header(), agents, activity, m.footer())
 }

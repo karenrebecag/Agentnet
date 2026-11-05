@@ -10,7 +10,7 @@ import (
 
 func (e env) watch() (int, error) {
 	guestsPath, _, _ := e.paths()
-	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath)), tea.WithAltScreen())
+	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath)), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := program.Run(); err != nil {
 		return ExitError, err
 	}
