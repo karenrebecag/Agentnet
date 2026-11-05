@@ -15,7 +15,11 @@ type cmdProc struct {
 // startProcess puts the child in its own group so Kill reaches the tunnel
 // and anything it spawned.
 func startProcess(bin string) (Process, error) {
-	cmd := exec.Command(bin)
+	return startCommand(bin)
+}
+
+func startCommand(bin string, args ...string) (Process, error) {
+	cmd := exec.Command(bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err
