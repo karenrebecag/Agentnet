@@ -47,7 +47,7 @@ Creates `~/.agentnet` with mode `0700` when that directory is missing. An existi
 agentnet init --install-claude-skill
 ```
 
-Also copies `adapters/claude-code/SKILL.md` to `~/.claude/skills/agentnet/SKILL.md`. Run it from a clone of this repository. Without the flag, that file is left untouched.
+Writes the skill embedded in the binary to `~/.claude/skills/agentnet/SKILL.md`. Without the flag, that path is left untouched. If the path is a symlink, or `SKILL.md` already exists with different contents, the command stops. `--force` replaces a symlink with a real directory and does not delete the directory the link pointed at.
 
 ## Quick start
 
@@ -81,7 +81,7 @@ AGENTNET {"id":"3f2a...","ts":"2026-01-01T12:00:00Z","from":"bob","to":"alice","
 | `agentnet list` | Show registered agents: name, kind, live or offline, working directory |
 | `agentnet leave [name]` | Remove a registration left behind by a crashed process |
 | `agentnet watch` | Live read-only view of agents and messages |
-| `agentnet init [--install-claude-skill]` | Create the data directory and print a `join` command for each known agent CLI on `PATH` |
+| `agentnet init [--install-claude-skill] [--force]` | Create the data directory and print a `join` command for each known agent CLI on `PATH` |
 | `agentnet guests add\|list\|approve\|revoke` | Create, list, approve or revoke a remote guest. Approve is local only |
 | `agentnet expose [--ttl 2h]` / `expose stop` | Open a quick tunnel, or stop one |
 | `agentnet version` | Print the version |

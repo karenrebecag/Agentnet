@@ -36,7 +36,8 @@ const (
   list                              show registered agents
   watch                             live, read-only view of agents and messages
   leave [name]                      drop a registration left behind
-  init  [--install-claude-skill]    create the data directory and print join commands
+  init  [--install-claude-skill] [--force]
+                                    create the data directory and print join commands
 
   guests add <name> --can-ask a,b   create a remote guest and print its token once
   guests list|approve|revoke <name> manage guests (approve only works here, locally)

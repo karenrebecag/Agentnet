@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	skilldoc "github.com/karenrebecag/agentnet/adapters/claude-code"
 )
 
 // initTools are the CLIs init knows how to print a join line for.
@@ -22,22 +25,23 @@ var initTools = []struct{ bin, kind string }{
 }
 
 type initConfig struct {
-	Home      string
-	SkillRoot string
-	SkillDir  string
-	Install   bool
-	LookPath  func(string) (string, error)
-	Stdout    io.Writer
+	Home     string
+	SkillDir string
+	Install  bool
+	Force    bool
+	LookPath func(string) (string, error)
+	Stdout   io.Writer
 }
 
 func (e env) init(args []string) (int, error) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	install := fs.Bool("install-claude-skill", false, "copy adapters/claude-code/SKILL.md into the Claude skills directory")
+	install := fs.Bool("install-claude-skill", false, "write the embedded Claude skill into the skills directory")
+	force := fs.Bool("force", false, "replace a symlink or a different SKILL.md")
 	if _, err := parse(fs, args); err != nil {
 		return ExitError, err
 	}
 	cfg := initConfig{
-		Home: e.store.Home, SkillRoot: ".", Install: *install,
+		Home: e.store.Home, Install: *install, Force: *force,
 		LookPath: exec.LookPath, Stdout: e.stdout,
 	}
 	if *install {
@@ -88,7 +92,7 @@ func runInit(cfg initConfig) error {
 	if !cfg.Install {
 		return nil
 	}
-	return copySkill(cfg.SkillRoot, cfg.SkillDir, cfg.Stdout)
+	return installSkill(cfg.SkillDir, cfg.Force, cfg.Stdout)
 }
 
 // ensureHome creates the data directory at 0700. An existing directory is kept,
@@ -119,16 +123,21 @@ func ensureHome(home string) (bool, error) {
 	return true, nil
 }
 
-func copySkill(root, destDir string, stdout io.Writer) error {
+func installSkill(destDir string, force bool, stdout io.Writer) error {
 	if destDir == "" {
 		return errors.New("missing skill directory")
 	}
-	src, err := findSkill(root)
-	if err != nil {
-		return err
-	}
-	data, err := os.ReadFile(src)
-	if err != nil {
+	// MkdirAll follows a symlink. Refuse, or remove only the link, before that.
+	lst, err := os.Lstat(destDir)
+	switch {
+	case err == nil && lst.Mode()&os.ModeSymlink != 0:
+		if !force {
+			return errors.New("skill directory is a symlink; rerun with --force to replace the link with a real directory")
+		}
+		if err := os.Remove(destDir); err != nil {
+			return err
+		}
+	case err != nil && !errors.Is(err, os.ErrNotExist):
 		return err
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
@@ -138,7 +147,30 @@ func copySkill(root, destDir string, stdout io.Writer) error {
 		return err
 	}
 	dest := filepath.Join(destDir, "SKILL.md")
-	if err := os.WriteFile(dest, data, 0o600); err != nil {
+	fileInfo, err := os.Lstat(dest)
+	if err == nil && fileInfo.Mode()&os.ModeSymlink != 0 {
+		if !force {
+			return errors.New("SKILL.md is a symlink; rerun with --force")
+		}
+		if err := os.Remove(dest); err != nil {
+			return err
+		}
+	} else if err == nil {
+		body, err := os.ReadFile(dest)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(body, skilldoc.Markdown) {
+			_, err = fmt.Fprintf(stdout, "skill %s\n", dest)
+			return err
+		}
+		if !force {
+			return errors.New("SKILL.md already exists and differs; rerun with --force")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.WriteFile(dest, skilldoc.Markdown, 0o600); err != nil {
 		return err
 	}
 	if err := os.Chmod(dest, 0o600); err != nil {
@@ -146,27 +178,4 @@ func copySkill(root, destDir string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "skill %s\n", dest)
 	return err
-}
-
-func findSkill(start string) (string, error) {
-	if start == "" {
-		start = "."
-	}
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", err
-	}
-	for range 8 {
-		cand := filepath.Join(dir, "adapters", "claude-code", "SKILL.md")
-		info, err := os.Stat(cand)
-		if err == nil && !info.IsDir() {
-			return cand, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return "", errors.New("adapters/claude-code/SKILL.md not found; run init from the agentnet repository")
 }
