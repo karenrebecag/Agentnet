@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `expose`: an MCP endpoint (tools `list_agents`, `ask`, `get_reply`) published through a Cloudflare quick tunnel for a bounded time, so remote assistants can message opted-in local agents.
 - `guests add|list|approve|revoke`: per-guest tokens stored as hashes, an allowlist of reachable agents, and pairing that can only be approved locally.
 - `join --accept-external` and `send --reply-to`.
+- `watch`: a live, read-only terminal view of agents, unread counts, messages and pending guests. It never moves a cursor.
 - Envelope fields `origin` and `reply_to`.
 
 ## [0.1.0] - 2026-11-05

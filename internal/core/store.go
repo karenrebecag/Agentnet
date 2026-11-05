@@ -137,7 +137,7 @@ func (s Store) SendWith(to, from, text string, opts SendOptions) (Envelope, erro
 	if err != nil {
 		return Envelope{}, err
 	}
-	env := Envelope{ID: id, TS: time.Now().UTC().Format(time.RFC3339), From: from, To: to, Text: text,
+	env := Envelope{ID: id, TS: time.Now().UTC().Format(time.RFC3339Nano), From: from, To: to, Text: text,
 		Origin: opts.Origin, ReplyTo: opts.ReplyTo}
 	line, err := json.Marshal(env)
 	if err != nil {
