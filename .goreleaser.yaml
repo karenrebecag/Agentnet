@@ -1,0 +1,35 @@
+version: 2
+
+# No brews: a formula needs a tap and a token that can push it.
+# The default GITHUB_TOKEN of this repository cannot write another repository.
+
+builds:
+  - id: agentnet
+    main: ./cmd/agentnet
+    binary: agentnet
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: agentnet
+    formats: [tar.gz]
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - id: archive
+    artifacts: archive
+
+release:
+  prerelease: auto
