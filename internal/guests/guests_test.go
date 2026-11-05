@@ -1,4 +1,4 @@
-package cli
+package guests
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 
 func TestAddCheckRevoke(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "guests.json")
-	token, err := Add(path, "alice")
+	token, err := Add(path, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,10 +47,10 @@ func TestAddCheckRevoke(t *testing.T) {
 
 func TestRejectsBadName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "guests.json")
-	if _, err := Add(path, "../alice"); err != ErrName {
+	if _, err := Add(path, "../alice", nil); err != ErrName {
 		t.Fatalf("path name: %v", err)
 	}
-	if _, err := Add(path, "Alice"); err != ErrName {
+	if _, err := Add(path, "Alice", nil); err != ErrName {
 		t.Fatalf("uppercase name: %v", err)
 	}
 }

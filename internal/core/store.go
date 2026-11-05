@@ -39,12 +39,24 @@ var (
 
 // Envelope is the wire format shared with the v0 Python prototype.
 type Envelope struct {
-	ID      string `json:"id"`
-	TS      string `json:"ts"`
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Text    string `json:"text"`
+	ID   string `json:"id"`
+	TS   string `json:"ts"`
+	From string `json:"from"`
+	To   string `json:"to"`
+	Text string `json:"text"`
+	// Origin is "external" for messages that entered through expose. Readers
+	// must treat those as third-party data, never as their user's instruction.
+	Origin  string `json:"origin,omitempty"`
+	ReplyTo string `json:"reply_to,omitempty"`
 	Corrupt bool   `json:"corrupt,omitempty"`
+}
+
+const OriginExternal = "external"
+
+// SendOptions carries the optional envelope fields.
+type SendOptions struct {
+	Origin  string
+	ReplyTo string
 }
 
 type Store struct {
@@ -104,6 +116,10 @@ func withLock(f *os.File, fn func() error) error {
 // Send appends one envelope under an exclusive flock, so concurrent senders
 // never interleave bytes of a long line.
 func (s Store) Send(to, from, text string) (Envelope, error) {
+	return s.SendWith(to, from, text, SendOptions{})
+}
+
+func (s Store) SendWith(to, from, text string, opts SendOptions) (Envelope, error) {
 	if err := ValidateName(to); err != nil {
 		return Envelope{}, err
 	}
@@ -121,7 +137,8 @@ func (s Store) Send(to, from, text string) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, err
 	}
-	env := Envelope{ID: id, TS: time.Now().UTC().Format(time.RFC3339), From: from, To: to, Text: text}
+	env := Envelope{ID: id, TS: time.Now().UTC().Format(time.RFC3339), From: from, To: to, Text: text,
+		Origin: opts.Origin, ReplyTo: opts.ReplyTo}
 	line, err := json.Marshal(env)
 	if err != nil {
 		return Envelope{}, err
