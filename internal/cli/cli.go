@@ -34,6 +34,7 @@ const (
                                     send a message (text from --message or stdin)
   read  [name]                      print unread messages once
   list                              show registered agents
+  watch                             live, read-only view of agents and messages
   leave [name]                      drop a registration left behind
 
   guests add <name> --can-ask a,b   create a remote guest and print its token once
@@ -79,6 +80,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		code, err = e.list()
 	case "leave":
 		code, err = e.leave(rest)
+	case "watch":
+		code, err = e.watch()
 	case "guests":
 		code, err = e.guests(rest)
 	case "expose":

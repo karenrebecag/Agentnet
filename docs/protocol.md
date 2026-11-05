@@ -31,7 +31,7 @@ One message is one line of UTF-8 JSON terminated by `\n`:
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | string | Unique message id. The reference CLI uses 128 random bits in hex. Readers must treat it as opaque |
-| `ts` | string | Send time, RFC 3339, UTC |
+| `ts` | string | Send time, RFC 3339 in UTC, with fractional seconds when available |
 | `from` | string | Sender name, as declared by the sender (not authenticated) |
 | `to` | string | Recipient name |
 | `text` | string | Message body, at most 256 KiB, trimmed of surrounding whitespace |
