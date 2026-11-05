@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -24,11 +26,12 @@ var (
 // earlier, and requests before registration fail with Cloudflare error 1033.
 // A quick tunnel gets a new hostname on every start, so the caller must end the
 // session if it dies instead of restarting it. cloudflared's log goes to logPath.
-func StartQuickTunnel(ctx context.Context, localURL, logPath, protocol string) (Process, string, error) {
+func StartQuickTunnel(ctx context.Context, localURL, logPath, pidPath, protocol string) (Process, string, error) {
 	bin, err := exec.LookPath("cloudflared")
 	if err != nil {
 		return nil, "", ErrBinaryMissing
 	}
+	KillOrphanTunnel(pidPath)
 	if protocol == "" {
 		protocol = "auto"
 	}
@@ -46,6 +49,7 @@ func StartQuickTunnel(ctx context.Context, localURL, logPath, protocol string) (
 		return nil, "", err
 	}
 	proc := &cmdProc{cmd: cmd, done: make(chan error, 1)}
+	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
 	found := make(chan string, 1)
 	go func() {
 		defer logFile.Close()
@@ -75,4 +79,26 @@ func StartQuickTunnel(ctx context.Context, localURL, logPath, protocol string) (
 		_ = proc.Kill()
 		return nil, "", ctx.Err()
 	}
+}
+
+// KillOrphanTunnel stops a cloudflared left running by an expose that died
+// without cleanup (SIGKILL, panic, OOM). Such a tunnel would keep forwarding
+// its public hostname to a port some other local server may now hold.
+func KillOrphanTunnel(pidPath string) {
+	raw, err := os.ReadFile(pidPath)
+	if err != nil {
+		return
+	}
+	defer os.Remove(pidPath)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		return
+	}
+	// Only kill it if that pid is still cloudflared, not a reused pid.
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if err != nil || !strings.Contains(string(out), "cloudflared") {
+		return
+	}
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
 }

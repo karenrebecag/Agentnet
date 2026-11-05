@@ -27,12 +27,18 @@ const (
 	askRetention     = 24 * time.Hour
 	pumpEvery        = 300 * time.Millisecond
 	guestInboxPrefix = "ext."
+	// Every tool call counts, not only ask, so polling or a pending guest
+	// cannot hammer the files the host's own CLI uses.
+	callsPerMinute   = 60
+	inflightPerGuest = 4
 )
 
 var (
 	errPending   = errors.New("pending approval: the host must run `agentnet guests approve <guest>` on their machine")
 	errNotTarget = errors.New("that agent is not available to this guest")
 	errNotFound  = errors.New("unknown id")
+	errInternal  = errors.New("internal error")
+	errBusy      = errors.New("too many requests, retry later")
 )
 
 type ServerConfig struct {
@@ -45,10 +51,15 @@ type ServerConfig struct {
 	// any other host are refused, which also defeats DNS rebinding.
 	Host    string
 	Expires time.Time
-	// MaxFailures of failed authentications, across all clients, end the session.
+	// Every MaxFailures failed authentications the host is warned. They never
+	// end the session: a stranger could otherwise shut it down at will, and the
+	// per-address lockout already makes guessing a 256-bit token pointless.
 	MaxFailures int
-	// Stop is called once when the session must end (TTL, kill switch, failures).
+	// Stop is called once when the session must end (TTL or kill switch).
 	Stop func(reason error)
+	// Warn reports events the host should see; real error details go here,
+	// never to the guest.
+	Warn func(msg string)
 	Now  func() time.Time
 }
 
@@ -67,6 +78,9 @@ type Server struct {
 	failures int
 	stopped  bool
 	asks     map[string]*pendingAsk
+	calls    map[string][]time.Time
+	inflight map[string]int
+	inboxMu  sync.Mutex
 	inboxes  map[string]bool
 }
 
@@ -77,7 +91,8 @@ func NewServer(cfg ServerConfig) *Server {
 	if cfg.MaxFailures <= 0 {
 		cfg.MaxFailures = DefaultMaxFailures
 	}
-	s := &Server{cfg: cfg, asks: map[string]*pendingAsk{}, inboxes: map[string]bool{}}
+	s := &Server{cfg: cfg, asks: map[string]*pendingAsk{}, inboxes: map[string]bool{},
+		calls: map[string][]time.Time{}, inflight: map[string]int{}}
 	s.limiter.Now = cfg.Now
 	return s
 }
@@ -177,10 +192,11 @@ func (s *Server) verify(_ context.Context, token string, r *http.Request) (*auth
 		s.mu.Lock()
 		s.limiter.NoteFailure(key)
 		s.failures++
-		over := s.failures >= s.cfg.MaxFailures
+		warn := s.failures%s.cfg.MaxFailures == 0
+		count := s.failures
 		s.mu.Unlock()
-		if over {
-			s.stop(ErrTooManyFailures)
+		if warn {
+			s.warn(fmt.Sprintf("%d failed authentications so far (last from %s)", count, key))
 		}
 		return nil, auth.ErrInvalidToken
 	}
@@ -190,28 +206,80 @@ func (s *Server) verify(_ context.Context, token string, r *http.Request) (*auth
 	return &auth.TokenInfo{UserID: guest.Name, Expiration: s.cfg.Expires}, nil
 }
 
-// guestFor re-reads the guest list on every call, so a revoke or an approval
-// takes effect immediately.
-func (s *Server) guestFor(req *mcp.CallToolRequest) (guests.Guest, error) {
+// enter authorizes one tool call and returns the function that ends it. It
+// re-reads the guest list on every call, so a revoke or an approval takes
+// effect immediately, and it applies the per-guest call rate and concurrency cap.
+func (s *Server) enter(req *mcp.CallToolRequest) (guests.Guest, func(), error) {
+	noop := func() {}
 	if req.Extra == nil || req.Extra.TokenInfo == nil {
-		return guests.Guest{}, auth.ErrInvalidToken
+		return guests.Guest{}, noop, auth.ErrInvalidToken
+	}
+	name := req.Extra.TokenInfo.UserID
+	if err := s.admitCall(name); err != nil {
+		return guests.Guest{}, noop, err
 	}
 	all, err := guests.List(s.cfg.GuestsPath)
 	if err != nil {
-		return guests.Guest{}, err
+		s.release(name)
+		return guests.Guest{}, noop, s.internal(err)
 	}
 	for _, g := range all {
-		if g.Name != req.Extra.TokenInfo.UserID || g.Revoked {
+		if g.Name != name || g.Revoked {
 			continue
 		}
 		if !g.Approved {
-			guests.MarkPending(s.cfg.GuestsPath, g.Name)
-			s.audit(g.Name, "pairing", "pending", 0)
-			return guests.Guest{}, errPending
+			s.release(name)
+			if !g.Pending {
+				_ = guests.MarkPending(s.cfg.GuestsPath, g.Name)
+				s.audit(g.Name, "pairing", "pending", 0)
+				s.warn(fmt.Sprintf("guest %s is waiting: run `agentnet guests approve %s`", g.Name, g.Name))
+			}
+			return guests.Guest{}, noop, errPending
 		}
-		return g, nil
+		return g, func() { s.release(name) }, nil
 	}
-	return guests.Guest{}, auth.ErrInvalidToken
+	s.release(name)
+	return guests.Guest{}, noop, auth.ErrInvalidToken
+}
+
+func (s *Server) admitCall(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.cfg.Now()
+	recent := s.calls[name][:0]
+	for _, at := range s.calls[name] {
+		if at.After(now.Add(-time.Minute)) {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) >= callsPerMinute || s.inflight[name] >= inflightPerGuest {
+		s.calls[name] = recent
+		return errBusy
+	}
+	s.calls[name] = append(recent, now)
+	s.inflight[name]++
+	return nil
+}
+
+func (s *Server) release(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inflight[name] > 0 {
+		s.inflight[name]--
+	}
+}
+
+func (s *Server) warn(msg string) {
+	if s.cfg.Warn != nil {
+		s.cfg.Warn(msg)
+	}
+}
+
+// internal logs the real error for the host and gives the guest nothing that
+// could reveal paths or usernames.
+func (s *Server) internal(err error) error {
+	s.warn("internal error: " + err.Error())
+	return errInternal
 }
 
 func (s *Server) audit(guest, action, result string, n int) {
@@ -245,7 +313,8 @@ type ListOutput struct {
 }
 
 func (s *Server) listAgents(_ context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListOutput, error) {
-	g, err := s.guestFor(req)
+	g, done, err := s.enter(req)
+	defer done()
 	if err != nil {
 		return nil, ListOutput{}, err
 	}
@@ -280,7 +349,8 @@ func waitFor(seconds int) time.Duration {
 }
 
 func (s *Server) ask(ctx context.Context, req *mcp.CallToolRequest, in AskInput) (*mcp.CallToolResult, ReplyOutput, error) {
-	g, err := s.guestFor(req)
+	g, done, err := s.enter(req)
+	defer done()
 	if err != nil {
 		return nil, ReplyOutput{}, err
 	}
@@ -298,11 +368,14 @@ func (s *Server) ask(ctx context.Context, req *mcp.CallToolRequest, in AskInput)
 	}
 	inbox := guestInboxPrefix + g.Name
 	if err := s.ensureInbox(inbox); err != nil {
-		return nil, ReplyOutput{}, err
+		return nil, ReplyOutput{}, s.internal(err)
 	}
 	env, err := s.cfg.Store.SendWith(in.To, inbox, in.Text, core.SendOptions{Origin: core.OriginExternal})
 	if err != nil {
-		return nil, ReplyOutput{}, err
+		if errors.Is(err, core.ErrEmptyText) || errors.Is(err, core.ErrTooLarge) {
+			return nil, ReplyOutput{}, err
+		}
+		return nil, ReplyOutput{}, s.internal(err)
 	}
 	pa := &pendingAsk{guest: g.Name, to: in.To, created: s.cfg.Now(), done: make(chan struct{})}
 	s.mu.Lock()
@@ -322,7 +395,8 @@ type GetReplyInput struct {
 }
 
 func (s *Server) getReply(ctx context.Context, req *mcp.CallToolRequest, in GetReplyInput) (*mcp.CallToolResult, ReplyOutput, error) {
-	g, err := s.guestFor(req)
+	g, done, err := s.enter(req)
+	defer done()
 	if err != nil {
 		return nil, ReplyOutput{}, err
 	}
@@ -352,9 +426,11 @@ func (s *Server) wait(ctx context.Context, id string, pa *pendingAsk, d time.Dur
 	return ReplyOutput{ID: id, Status: "answered", Reply: pa.reply.Text, From: pa.reply.From}
 }
 
+// ensureInbox has its own lock so the file I/O of Register never blocks
+// authentication or the reply pump.
 func (s *Server) ensureInbox(name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.inboxMu.Lock()
+	defer s.inboxMu.Unlock()
 	if s.inboxes[name] {
 		return nil
 	}
@@ -381,19 +457,21 @@ func (s *Server) Pump(ctx context.Context) {
 }
 
 func (s *Server) releaseInboxes() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.inboxMu.Lock()
+	defer s.inboxMu.Unlock()
 	for name := range s.inboxes {
 		_ = s.cfg.Store.Unregister(name)
 	}
 }
 
 func (s *Server) pumpOnce() {
-	s.mu.Lock()
+	s.inboxMu.Lock()
 	names := make([]string, 0, len(s.inboxes))
 	for name := range s.inboxes {
 		names = append(names, name)
 	}
+	s.inboxMu.Unlock()
+	s.mu.Lock()
 	cutoff := s.cfg.Now().Add(-askRetention)
 	for id, pa := range s.asks {
 		if pa.created.Before(cutoff) {
@@ -440,6 +518,8 @@ func (s *Server) deliverReply(inbox string, msg core.Envelope) {
 	close(target.done)
 }
 
+// locked never allocates: unauthenticated addresses must not grow the map.
 func (l *Limiter) locked(name string) bool {
-	return l.now().Before(l.get(name).lockedTo)
+	g, ok := l.guests[name]
+	return ok && l.now().Before(g.lockedTo)
 }

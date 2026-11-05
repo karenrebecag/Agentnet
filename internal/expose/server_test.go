@@ -126,20 +126,52 @@ func TestUnknownTokenIsRefused(t *testing.T) {
 	}
 }
 
-func TestRepeatedAuthFailuresStopTheSession(t *testing.T) {
+func TestAuthFailuresLockOneAddressWithoutEndingTheSession(t *testing.T) {
 	f := newFixture(t)
-	f.srv.cfg.MaxFailures = 3
-	for range 3 {
-		rawStatus(t, f.http.URL, func(r *http.Request) {
-			r.Header.Set("Authorization", "Bearer nope")
-			r.Header.Set("CF-Connecting-IP", "198.51.100."+strings.Repeat("1", 1))
+	token := f.addGuest("alice", true)
+	from := func(ip, tok string) int {
+		return rawStatus(t, f.http.URL, func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+tok)
+			r.Header.Set("CF-Connecting-IP", ip)
 		})
 	}
-	if !errors.Is(f.stopped, ErrTooManyFailures) {
-		t.Fatalf("stopped = %v", f.stopped)
+	for range FailuresBeforeLock {
+		from("198.51.100.1", "nope")
 	}
-	if got := rawStatus(t, f.http.URL, func(*http.Request) {}); got != http.StatusServiceUnavailable {
-		t.Fatalf("after stop: %d", got)
+	if got := from("198.51.100.1", token); got != http.StatusUnauthorized {
+		t.Fatalf("locked address with a valid token: %d", got)
+	}
+	if got := from("198.51.100.2", token); got == http.StatusUnauthorized || got == http.StatusServiceUnavailable {
+		t.Fatalf("other address refused: %d", got)
+	}
+	if f.stopped != nil {
+		t.Fatalf("a stranger ended the session: %v", f.stopped)
+	}
+}
+
+func TestParallelCallsPerGuestAreCapped(t *testing.T) {
+	f := newFixture(t)
+	f.store.Register("bob", "test", true)
+	token := f.addGuest("alice", true, "bob")
+	cs, _ := f.connect(token)
+	defer cs.Close()
+	var sent ReplyOutput
+	call(t, cs, "ask", map[string]any{"to": "bob", "text": "x", "wait_seconds": 1}, &sent)
+	results := make(chan string, inflightPerGuest+2)
+	for range inflightPerGuest + 2 {
+		go func() {
+			text, _ := call(t, cs, "get_reply", map[string]any{"id": sent.ID, "wait_seconds": 3}, nil)
+			results <- text
+		}()
+	}
+	busy := 0
+	for range inflightPerGuest + 2 {
+		if strings.Contains(<-results, "too many requests") {
+			busy++
+		}
+	}
+	if busy == 0 {
+		t.Fatal("no call was refused past the in-flight cap")
 	}
 }
 

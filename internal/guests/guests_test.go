@@ -54,3 +54,14 @@ func TestRejectsBadName(t *testing.T) {
 		t.Fatalf("uppercase name: %v", err)
 	}
 }
+
+func TestRevokedNameCannotBeReused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guests.json")
+	if _, err := Add(path, "alice", nil); err != nil {
+		t.Fatal(err)
+	}
+	Revoke(path, "alice")
+	if _, err := Add(path, "alice", nil); err != ErrExists {
+		t.Fatalf("re-add after revoke: %v", err)
+	}
+}

@@ -120,13 +120,14 @@ func (e env) expose(args []string) (int, error) {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	pidPath := filepath.Join(e.store.Home, "cloudflared.pid")
 	tunnel, host, err := expose.StartQuickTunnel(ctx, "http://"+ln.Addr().String(),
-		filepath.Join(e.store.Home, "cloudflared.log"), *protocol)
+		filepath.Join(e.store.Home, "cloudflared.log"), pidPath, *protocol)
 	if err != nil {
 		ln.Close()
 		return ExitError, err
 	}
-	defer tunnel.Kill()
+	defer func() { _ = tunnel.Kill(); _ = os.Remove(pidPath) }()
 
 	stopReason := make(chan error, 1)
 	srv := expose.NewServer(expose.ServerConfig{
@@ -138,9 +139,18 @@ func (e env) expose(args []string) (int, error) {
 			default:
 			}
 		},
+		Warn: func(msg string) { fmt.Fprintf(e.stderr, "[%s] %s\n", time.Now().Format("15:04:05"), msg) },
 	})
 	go srv.Pump(ctx)
-	httpServer := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	// WriteTimeout leaves room for the 50 s long poll of ask and get_reply.
+	httpServer := &http.Server{
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      expose.MaxWait + 20*time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 	go httpServer.Serve(ln)
 
 	fmt.Fprintf(e.stdout, "agentnet is reachable for %s at:\n\n  https://%s/\n\nAdd it as a remote MCP connector with the guest's token as API key.\nStop: Ctrl-C, or `agentnet expose stop`. Pending guests: `agentnet guests list`.\n", *ttl, host)
@@ -165,10 +175,11 @@ func (e env) expose(args []string) (int, error) {
 			}
 		}
 	}
+	// Cut the public path first; draining in-flight requests can wait.
+	_ = tunnel.Kill()
 	shutdown, done := context.WithTimeout(context.Background(), 3*time.Second)
 	defer done()
 	_ = httpServer.Shutdown(shutdown)
-	_ = tunnel.Kill()
 	fmt.Fprintf(e.stderr, "expose stopped: %v\n", reason)
 	return ExitOK, nil
 }

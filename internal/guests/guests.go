@@ -59,8 +59,10 @@ func Add(path, name string, targets []string) (string, error) {
 	token := hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(token))
 	err := mutate(path, func(recs []record) ([]record, error) {
+		// A revoked name is never reused: the new guest would inherit the old
+		// one's inbox and pending replies.
 		for _, r := range recs {
-			if r.Name == name && !r.Revoked {
+			if r.Name == name {
 				return nil, ErrExists
 			}
 		}
