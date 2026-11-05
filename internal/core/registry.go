@@ -26,6 +26,9 @@ type Agent struct {
 	PID    int    `json:"pid"`
 	CWD    string `json:"cwd,omitempty"`
 	Joined string `json:"joined"`
+	// AcceptExternal opts an agent into messages from exposed guests. Off by
+	// default: an agent that did not ask for it is invisible to guests.
+	AcceptExternal bool `json:"accept_external,omitempty"`
 }
 
 type AgentStatus struct {
@@ -76,7 +79,7 @@ func (s Store) IsLive(name string, now time.Time) bool {
 
 // Register claims a name for this process. The registry lock makes the
 // check-then-write atomic, so two joins racing for one name cannot both win.
-func (s Store) Register(name, kind string) error {
+func (s Store) Register(name, kind string, acceptExternal bool) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
@@ -95,7 +98,7 @@ func (s Store) Register(name, kind string) error {
 		}
 		cwd, _ := os.Getwd()
 		data, err := json.Marshal(Agent{Name: name, Kind: kind, PID: os.Getpid(), CWD: cwd,
-			Joined: time.Now().UTC().Format(time.RFC3339)})
+			Joined: time.Now().UTC().Format(time.RFC3339), AcceptExternal: acceptExternal})
 		if err != nil {
 			return err
 		}
@@ -137,6 +140,14 @@ func (s Store) Leave(name string) error {
 		return err
 	}
 	return nil
+}
+
+func (s Store) Lookup(name string, now time.Time) (AgentStatus, bool) {
+	agent, _, err := s.readAgent(name)
+	if err != nil {
+		return AgentStatus{}, false
+	}
+	return AgentStatus{Agent: agent, Live: s.IsLive(name, now)}, true
 }
 
 func (s Store) List(now time.Time) ([]AgentStatus, error) {

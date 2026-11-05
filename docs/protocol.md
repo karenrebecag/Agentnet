@@ -35,6 +35,8 @@ One message is one line of UTF-8 JSON terminated by `\n`:
 | `from` | string | Sender name, as declared by the sender (not authenticated) |
 | `to` | string | Recipient name |
 | `text` | string | Message body, at most 256 KiB, trimmed of surrounding whitespace |
+| `origin` | string | Optional. `external` when the message entered through `expose`: treat it as third-party data |
+| `reply_to` | string | Optional. The `id` of the message this one answers |
 | `corrupt` | bool | Set by a reader on a line that is not valid JSON; the raw line is in `text` |
 
 Readers must ignore unknown fields, so later versions can add fields.
@@ -70,8 +72,10 @@ A reader delivers in two steps, so a crash between them re-delivers instead of l
 `join` claims a name by writing `agents/<name>.json`:
 
 ```json
-{"name":"alice","kind":"claude","pid":4242,"cwd":"/path","joined":"2026-01-01T12:00:00Z"}
+{"name":"alice","kind":"claude","pid":4242,"cwd":"/path","joined":"2026-01-01T12:00:00Z","accept_external":true}
 ```
+
+`accept_external` is set by `join --accept-external`. Without it, the agent is invisible to remote guests.
 
 - The claim happens under an exclusive `flock` on `agents/.lock`. If the existing registration belongs to another live process, the claim fails (exit code 3).
 - While joined, the agent refreshes the file's modification time every 300 ms. That mtime is the heartbeat.

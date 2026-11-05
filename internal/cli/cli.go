@@ -28,11 +28,18 @@ const (
 	eventPrefix = "AGENTNET "
 	usage       = `usage: agentnet <command> [args]
 
-  join  [name] [--kind K]           register and stream incoming messages to stdout
-  send  <to> [--from N] [--message] send a message (text from --message or stdin)
+  join  [name] [--kind K] [--accept-external]
+                                    register and stream incoming messages to stdout
+  send  <to> [--from N] [--message T] [--reply-to ID]
+                                    send a message (text from --message or stdin)
   read  [name]                      print unread messages once
   list                              show registered agents
   leave [name]                      drop a registration left behind
+
+  guests add <name> --can-ask a,b   create a remote guest and print its token once
+  guests list|approve|revoke <name> manage guests (approve only works here, locally)
+  expose [--ttl 2h]                 publish an MCP endpoint through a Cloudflare quick tunnel
+  expose stop                       kill switch for a running expose
 
 AGENTNET_NAME sets the default name, AGENTNET_HOME the data directory.
 Exit codes: 0 ok, 1 error, 2 recipient offline (queued), 3 name already live.
@@ -72,6 +79,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		code, err = e.list()
 	case "leave":
 		code, err = e.leave(rest)
+	case "guests":
+		code, err = e.guests(rest)
+	case "expose":
+		code, err = e.expose(rest)
 	case "version", "--version":
 		fmt.Fprintln(stdout, Version)
 		return ExitOK
@@ -145,6 +156,7 @@ func (e env) deliver(name string) error {
 func (e env) join(args []string) (int, error) {
 	fs := flag.NewFlagSet("join", flag.ContinueOnError)
 	kind := fs.String("kind", "agent", "claude, grok, codex... informative only")
+	acceptExternal := fs.Bool("accept-external", false, "let exposed guests message this agent")
 	positionals, err := parse(fs, args)
 	if err != nil {
 		return ExitError, err
@@ -153,7 +165,7 @@ func (e env) join(args []string) (int, error) {
 	if err != nil {
 		return ExitError, err
 	}
-	if err := e.store.Register(name, *kind); err != nil {
+	if err := e.store.Register(name, *kind, *acceptExternal); err != nil {
 		return ExitError, err
 	}
 	defer e.store.Unregister(name)
@@ -183,6 +195,7 @@ func (e env) send(args []string) (int, error) {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	from := fs.String("from", os.Getenv("AGENTNET_NAME"), "sender name")
 	message := fs.String("message", "", "message text (default: stdin)")
+	replyTo := fs.String("reply-to", "", "id of the message this answers")
 	positionals, err := parse(fs, args)
 	if err != nil {
 		return ExitError, err
@@ -201,7 +214,7 @@ func (e env) send(args []string) (int, error) {
 	if *from == "" {
 		return ExitError, errors.New("missing --from (or AGENTNET_NAME)")
 	}
-	env, err := e.store.Send(positionals[0], *from, text)
+	env, err := e.store.SendWith(positionals[0], *from, text, core.SendOptions{ReplyTo: *replyTo})
 	if err != nil {
 		return ExitError, err
 	}

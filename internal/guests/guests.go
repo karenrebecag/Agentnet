@@ -1,5 +1,5 @@
-// Package cli holds the local guest list. Approval never happens through a tunnel.
-package cli
+// Package guests holds the local guest list. Approval never happens through a tunnel.
+package guests
 
 import (
 	"crypto/rand"
@@ -26,18 +26,29 @@ var nameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 
 // Guest is the public view. The token and its hash are not in this struct.
 type Guest struct {
-	Name    string `json:"name"`
-	Revoked bool   `json:"revoked"`
+	Name     string   `json:"name"`
+	Revoked  bool     `json:"revoked"`
+	Approved bool     `json:"approved"`
+	Pending  bool     `json:"pending"`
+	Targets  []string `json:"targets"`
 }
 
 type record struct {
-	Name    string `json:"name"`
-	Hash    string `json:"hash"`
-	Revoked bool   `json:"revoked"`
+	Name     string   `json:"name"`
+	Hash     string   `json:"hash"`
+	Revoked  bool     `json:"revoked"`
+	Approved bool     `json:"approved"`
+	Pending  bool     `json:"pending"`
+	Targets  []string `json:"targets"`
+}
+
+func (r record) public() Guest {
+	return Guest{Name: r.Name, Revoked: r.Revoked, Approved: r.Approved, Pending: r.Pending, Targets: r.Targets}
 }
 
 // Add creates a guest and returns the token once. The file stores only the hash.
-func Add(path, name string) (string, error) {
+// Targets are the local agents this guest may ask; it can never reach any other.
+func Add(path, name string, targets []string) (string, error) {
 	if !nameRE.MatchString(name) {
 		return "", ErrName
 	}
@@ -48,12 +59,14 @@ func Add(path, name string) (string, error) {
 	token := hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(token))
 	err := mutate(path, func(recs []record) ([]record, error) {
+		// A revoked name is never reused: the new guest would inherit the old
+		// one's inbox and pending replies.
 		for _, r := range recs {
-			if r.Name == name && !r.Revoked {
+			if r.Name == name {
 				return nil, ErrExists
 			}
 		}
-		return append(recs, record{Name: name, Hash: hex.EncodeToString(sum[:])}), nil
+		return append(recs, record{Name: name, Hash: hex.EncodeToString(sum[:]), Targets: targets}), nil
 	})
 	if err != nil {
 		return "", err
@@ -85,7 +98,7 @@ func List(path string) ([]Guest, error) {
 	}
 	out := make([]Guest, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, Guest{Name: r.Name, Revoked: r.Revoked})
+		out = append(out, r.public())
 	}
 	return out, nil
 }
@@ -112,7 +125,38 @@ func Check(path, token string) (Guest, error) {
 	if hit == nil || hit.Revoked {
 		return Guest{}, ErrDenied
 	}
-	return Guest{Name: hit.Name}, nil
+	return hit.public(), nil
+}
+
+// MarkPending records that a guest with a valid token called before approval,
+// so the host can see who is waiting.
+func MarkPending(path, name string) error {
+	return mutate(path, func(recs []record) ([]record, error) {
+		for i := range recs {
+			if recs[i].Name == name && !recs[i].Revoked && !recs[i].Approved {
+				recs[i].Pending = true
+			}
+		}
+		return recs, nil
+	})
+}
+
+// Approve is the pairing step. It only exists as a local command: the server
+// never calls it, so a remote caller cannot approve itself.
+func Approve(path, name string) error {
+	if !nameRE.MatchString(name) {
+		return ErrName
+	}
+	return mutate(path, func(recs []record) ([]record, error) {
+		for i := range recs {
+			if recs[i].Name == name && !recs[i].Revoked {
+				recs[i].Approved = true
+				recs[i].Pending = false
+				return recs, nil
+			}
+		}
+		return nil, ErrNotFound
+	})
 }
 
 func mutate(path string, fn func([]record) ([]record, error)) error {

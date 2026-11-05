@@ -106,7 +106,7 @@ func TestFullyReadInboxIsTruncatedPastRotation(t *testing.T) {
 
 func TestStaleHeartbeatCountsOffline(t *testing.T) {
 	s := newStore(t)
-	if err := s.Register("alice", "test"); err != nil {
+	if err := s.Register("alice", "test", false); err != nil {
 		t.Fatal(err)
 	}
 	if !s.IsLive("alice", time.Now()) {
@@ -122,7 +122,7 @@ func TestNameLiveInAnotherProcessIsRefused(t *testing.T) {
 	path, _ := s.agentPath("alice")
 	other := `{"name":"alice","kind":"test","pid":` + strconv.Itoa(os.Getppid()) + `,"joined":"x"}`
 	os.WriteFile(path, []byte(other), 0o600)
-	if err := s.Register("alice", "test"); !errors.Is(err, ErrNameTaken) {
+	if err := s.Register("alice", "test", false); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("err = %v, want ErrNameTaken", err)
 	}
 }
