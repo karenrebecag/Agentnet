@@ -9,3 +9,7 @@ var errUnixOnly = errors.New("tunnel process control requires unix")
 func startProcess(string) (Process, error) {
 	return nil, errUnixOnly
 }
+
+func startCommand(string, ...string) (Process, error) {
+	return nil, errUnixOnly
+}
