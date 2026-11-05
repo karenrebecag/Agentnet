@@ -1,5 +1,8 @@
 version: 2
 
+# The repository name is capitalized; archives keep the binary's name.
+project_name: agentnet
+
 # No brews: a formula needs a tap and a token that can push it.
 # The default GITHUB_TOKEN of this repository cannot write another repository.
 
@@ -18,7 +21,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      - -s -w -X github.com/karenrebecag/agentnet/internal/cli.Version={{.Version}}
 
 archives:
   - id: agentnet

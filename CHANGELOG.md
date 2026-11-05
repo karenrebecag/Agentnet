@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `agentnet version` printed `dev` in release binaries, and release archives were named after the capitalized repository.
+
 ## [0.2.0] - 2026-11-05
 
 ### Added
