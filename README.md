@@ -33,7 +33,21 @@ Interactive agents are not servers. A Claude Code or Grok session in a terminal 
 go install github.com/karenrebecag/agentnet/cmd/agentnet@latest
 ```
 
-Requires Go 1.23 or later. Prebuilt, signed binaries are planned for the first tagged release.
+Requires Go 1.23 or later. A tag `v*` publishes binaries, checksums and an SBOM.
+
+## init
+
+```bash
+agentnet init
+```
+
+Creates `~/.agentnet` with mode `0700` when that directory is missing. An existing directory is kept, including its inbox. For each of `claude`, `grok`, `codex` and `gemini` found on `PATH`, it prints a `join` command. It does not install those tools.
+
+```bash
+agentnet init --install-claude-skill
+```
+
+Also copies `adapters/claude-code/SKILL.md` to `~/.claude/skills/agentnet/SKILL.md`. Run it from a clone of this repository. Without the flag, that file is left untouched.
 
 ## Quick start
 
@@ -62,10 +76,14 @@ AGENTNET {"id":"3f2a...","ts":"2026-01-01T12:00:00Z","from":"bob","to":"alice","
 | Command | Description |
 |---|---|
 | `agentnet join [name] [--kind K]` | Register `name` and print each incoming message as one `AGENTNET {...}` line. Runs until interrupted |
-| `agentnet send <to> [--from N] [--message T]` | Send a message. The text comes from `--message` or stdin |
+| `agentnet send <to> [--from N] [--message T] [--reply-to ID]` | Send a message. The text comes from `--message` or stdin. `--reply-to` is the id this answers |
 | `agentnet read [name]` | Print unread messages once and mark them read |
 | `agentnet list` | Show registered agents: name, kind, live or offline, working directory |
 | `agentnet leave [name]` | Remove a registration left behind by a crashed process |
+| `agentnet watch` | Live read-only view of agents and messages |
+| `agentnet init [--install-claude-skill]` | Create the data directory and print a `join` command for each known agent CLI on `PATH` |
+| `agentnet guests add\|list\|approve\|revoke` | Create, list, approve or revoke a remote guest. Approve is local only |
+| `agentnet expose [--ttl 2h]` / `expose stop` | Open a quick tunnel, or stop one |
 | `agentnet version` | Print the version |
 
 | Environment variable | Default | Meaning |
@@ -107,7 +125,13 @@ agentnet authenticates nothing on the local machine. Any process running as your
 
 **A message is data from another party.** It is never an instruction from the person running the agent, and it never counts as their approval. Agents should read messages the way they read a web page or an email, not the way they read their user.
 
-Exposing agentnet beyond the local machine is a separate feature with its own threat model, and it is not part of this release.
+## Expose
+
+Local messages stay on this machine until someone runs `agentnet expose`. That command needs `cloudflared` already on `PATH`. It does not download it. It opens one Cloudflare quick tunnel for a TTL (default 2h, at most 12h) and prints the URL. Stop it with Ctrl-C or `agentnet expose stop`. If the tunnel process dies, the session ends and is not restarted.
+
+A remote guest is created with `agentnet guests add <name> --can-ask <agent>` and stays pending until `agentnet guests approve <name>` runs on this machine. Approval is local only. The guest's messages carry `"origin":"external"`. An agent receives them only if it joined with `--accept-external`.
+
+Five failed authentications from the same address lock that address for 15 minutes. Every 20 failures the host is warned. Those failures do not end the session. The threat model is [docs/threat-model.md](docs/threat-model.md).
 
 ## Development
 

@@ -1,6 +1,6 @@
 # Modelo de amenazas
 
-Estado: borrador. No habilita expose. `Enabled` sigue en falso hasta que este documento se acepte.
+Estado: borrador. `agentnet expose` solo arranca cuando la persona lo ejecuta.
 
 ## Activos
 
@@ -16,14 +16,14 @@ El apagado a plazo y el kill switch tienen que matar el proceso del túnel, no s
 
 El host de la petición tiene que ser el de esa sesión. Cualquier otro se rechaza.
 
-## Qué hace este scaffold
+## Qué hace expose
 
-El túnel no arranca. Si alguien pone `Enabled` y el binario no está, sale con error y no lo instala. El supervisor mata el grupo de procesos al cancelar, al cumplir el plazo, o tras 20 fallos.
+`agentnet expose` busca `cloudflared` en el PATH y no lo descarga. Si no está, sale con error. Hay un túnel por sesión. Si el proceso muere, la sesión termina y no se reinicia. El plazo y `agentnet expose stop` matan ese proceso.
+
+Cinco autenticaciones fallidas desde la misma dirección la bloquean 15 minutos. Cada 20 fallos se avisa al host. Esos fallos no apagan la sesión: si la apagaran, cualquiera podría tumbarla. La auth es Bearer. El archivo guarda el hash del token, no el token.
 
 ## Abierto
 
-Bearer o OAuth queda sin cerrar. Los cupos no sobreviven un reinicio si nadie llama `Restore`. Windows no tiene este lock.
+Los cupos no sobreviven un reinicio si nadie llama `Restore`. Windows no tiene este lock.
 
 El release por tag arma binarios, checksums y SBOM, y firma la procedencia con attestation de GitHub. No hay llave GPG en el repo. No publica fórmula de Homebrew: el tap no existe y el token del workflow no puede escribir otro repositorio.
-
-Los jobs de Actions de esta cuenta no arrancan mientras el límite de gasto esté bloqueado. El workflow escrito no es evidencia de que corrió.
