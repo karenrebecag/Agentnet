@@ -79,6 +79,10 @@ func (f *fakeActions) DecideSignin(_ context.Context, id string, approve bool) e
 func (f *fakeActions) Sessions(context.Context, map[int]string) ([]sessions.Session, error) {
 	return []sessions.Session{{PID: 101, Tool: "grok", Name: "grok-011", TTY: "ttys011", State: "open"}}, nil
 }
+func (f *fakeActions) OpenToGuests(agent string) error {
+	f.calls = append(f.calls, "open "+agent)
+	return nil
+}
 func (f *fakeActions) Copy(text string) error {
 	f.calls = append(f.calls, "copy "+text)
 	return nil
@@ -207,7 +211,7 @@ func TestAddAsksNameThenAgentsAndShowsTheCode(t *testing.T) {
 	m = drive(t, m, append(append(splitKeys("add"), "enter"), splitKeys("claude-web")...)...)
 	m = drive(t, m, "enter")
 	m = drive(t, m, append(splitKeys("mac.claude"), "enter")...)
-	if strings.Join(act.calls, ";") != "add-web-guest claude-web mac.claude" {
+	if strings.Join(act.calls, ";") != "open claude;add-web-guest claude-web mac.claude" {
 		t.Fatalf("calls = %v", act.calls)
 	}
 	if m.secret == nil || m.secret.token != "ABCD-EFGH" || !strings.Contains(m.secret.hint, "https://relay.example/mcp") {
@@ -254,7 +258,7 @@ func TestAddWithAnExistingNameReconnectsOrRenames(t *testing.T) {
 	act := &fakeActions{}
 	m := drive(t, newTestModel(act), "right", "right", "n")
 	drive(t, m, append(splitKeys("perplexity"), "enter")...)
-	if strings.Join(act.calls, ";") != "pair perplexity" {
+	if strings.Join(act.calls, ";") != "open claude;pair perplexity" {
 		t.Fatalf("a live guest of that name must get a new code, calls = %v", act.calls)
 	}
 	act = &fakeActions{}

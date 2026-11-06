@@ -107,7 +107,15 @@ func (m Model) selectedSignin() (relay.Signin, bool) {
 func (m Model) copyJoin(external bool) (tea.Model, tea.Cmd) {
 	s, ok := m.selectedSession()
 	if !ok {
-		if strings.HasPrefix(m.selectedKey(), "agent/") {
+		agent, isAgent := strings.CutPrefix(m.selectedKey(), "agent/")
+		switch {
+		case isAgent && external:
+			if err := m.act.OpenToGuests(agent); err != nil {
+				m.setStatus(err.Error(), true)
+			} else {
+				m.setStatus(agent+" takes web guests until its session ends", false)
+			}
+		case isAgent:
 			m.setStatus("already in the network; Enter joins a row marked not joined", false)
 		}
 		return m, nil
@@ -202,8 +210,11 @@ func (m Model) wizardEnter() (tea.Model, tea.Cmd) {
 	m.wizard, m.mode = nil, inputOff
 	m.input.Blur()
 	m.busy = true
-	act := m.act
+	act, node := m.act, m.info.Node
 	return m, run("web guest "+name+" added", func(ctx context.Context) (*secretNote, error) {
+		if err := openLocal(act, node, targets); err != nil {
+			return nil, err
+		}
 		p, err := act.AddWebGuest(ctx, name, targets)
 		return pairingNote(name, p), err
 	})
@@ -225,8 +236,11 @@ func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
 			m.wizard, m.mode = nil, inputOff
 			m.input.Blur()
 			m.busy = true
-			act := m.act
+			act, node, targets := m.act, m.info.Node, g.Targets
 			return m, run(name+" already exists: new code for it", func(ctx context.Context) (*secretNote, error) {
+				if err := openLocal(act, node, targets); err != nil {
+					return nil, err
+				}
 				p, err := act.PairGuest(ctx, name)
 				return pairingNote(name, p), err
 			})
@@ -272,9 +286,14 @@ func (m Model) wizardSuggestions() []suggestion {
 	if m.wizard == nil || m.wizard.step != 1 {
 		return nil
 	}
-	var open, closed []string
+	var here, open, closed []string
+	for _, a := range m.snap.Agents {
+		if a.Live && m.info.Node != "" {
+			here = append(here, m.info.Node+"."+a.Name)
+		}
+	}
 	for _, n := range m.nodes {
-		if n.Revoked {
+		if n.Revoked || n.Name == m.info.Node {
 			continue
 		}
 		for _, a := range n.Agents {
@@ -286,6 +305,20 @@ func (m Model) wizardSuggestions() []suggestion {
 		}
 	}
 	word := m.input.Value()
-	return append(filterList(open, word, "agent on the relay"),
-		filterList(closed, word, "does not take guests yet: rejoin it from Agents with e")...)
+	out := filterList(here, word, "on this machine: open to this guest while its session lasts")
+	out = append(out, filterList(open, word, "on another machine")...)
+	return append(out, filterList(closed, word, "on another machine: it must join there with --accept-external")...)
+}
+
+// openLocal opens the chosen agents of this machine to guests. Choosing them
+// is the consent, and it lasts only as long as each agent's current session.
+func openLocal(act Actions, node string, targets []string) error {
+	for _, t := range targets {
+		if agent, ok := strings.CutPrefix(t, node+"."); ok && node != "" {
+			if err := act.OpenToGuests(agent); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

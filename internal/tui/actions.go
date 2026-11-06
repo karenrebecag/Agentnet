@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/karenrebecag/agentnet/internal/core"
 	"github.com/karenrebecag/agentnet/internal/guests"
 	"github.com/karenrebecag/agentnet/internal/relay"
 	"github.com/karenrebecag/agentnet/internal/sessions"
@@ -33,12 +34,16 @@ type Actions interface {
 	DecideSignin(ctx context.Context, id string, approve bool) error
 	Sessions(ctx context.Context, joined map[int]string) ([]sessions.Session, error)
 	Copy(text string) error
+	// OpenToGuests lets web guests reach a live agent on this machine until
+	// its session ends.
+	OpenToGuests(agent string) error
 }
 
 // Local runs actions against this machine's files and its relay.
 type Local struct {
 	Home       string
 	GuestsPath string
+	Store      core.Store
 }
 
 func (l Local) Nodes(ctx context.Context) ([]relay.Node, error) { return relay.ListNodes(ctx, l.Home) }
@@ -97,3 +102,5 @@ func (l Local) Sessions(ctx context.Context, joined map[int]string) ([]sessions.
 }
 
 func (l Local) Copy(text string) error { return sessions.Copy(text) }
+
+func (l Local) OpenToGuests(agent string) error { return l.Store.OpenToGuests(agent) }

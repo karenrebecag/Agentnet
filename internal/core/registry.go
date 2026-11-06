@@ -110,6 +110,40 @@ func (s Store) Register(name, kind string, acceptExternal bool) error {
 	})
 }
 
+// OpenToGuests lets guests reach the session that holds name right now. The
+// flag lives in that session's registration, so it ends with the session: the
+// next process to join under the same name starts closed again.
+func (s Store) OpenToGuests(name string) error {
+	dir, err := s.dir("agents")
+	if err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	return withLock(lock, func() error {
+		agent, _, err := s.readAgent(name)
+		if err != nil || !s.IsLive(name, time.Now()) {
+			return fmt.Errorf("%s is not in the network right now", name)
+		}
+		if agent.AcceptExternal {
+			return nil
+		}
+		agent.AcceptExternal = true
+		data, err := json.Marshal(agent)
+		if err != nil {
+			return err
+		}
+		path, err := s.agentPath(name)
+		if err != nil {
+			return err
+		}
+		return writeAtomic(path, data)
+	})
+}
+
 func (s Store) Heartbeat(name string) error {
 	path, err := s.agentPath(name)
 	if err != nil {
