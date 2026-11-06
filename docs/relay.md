@@ -80,7 +80,7 @@ Delivery is at least once. On every connection the relay redelivers everything a
 
 ## Guests: `POST /mcp`
 
-A stateless Streamable HTTP MCP endpoint. A guest authenticates with its static token (`Authorization: Bearer an_…`, for curl or clients that take an API key) or with an OAuth access token (see [Signing in from a web client](#signing-in-from-a-web-client)). Its tools have the same names and meaning as `expose`:
+A stateless Streamable HTTP MCP endpoint. A guest authenticates with its token, as `Authorization: Bearer an_…` or in the connector link as `?key=an_…` (see [Connecting a web AI with a link](#connecting-a-web-ai-with-a-link)). There is no OAuth: no `/.well-known` metadata and no sign-in page. Its tools have the same names and meaning as `expose`:
 
 - `list_agents`: the agents this guest may ask, with `live` status.
 - `ask {to, text, wait_seconds}`: send and wait up to 50 s for a reply.
@@ -109,10 +109,7 @@ Authenticated with `ADMIN_TOKEN`.
 | `POST` | `/v1/admin/nodes` | `{name, kind, targets?, inbox?}` | `{name, token}` |
 | `GET` | `/v1/admin/nodes` | | `[{name, kind, targets, revoked, created, last_seen, agents}]`, never token hashes |
 | `POST` | `/v1/admin/nodes/{name}/rotate` | | `{token}` |
-| `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}`. Also ends every OAuth grant of a guest |
-| `POST` | `/v1/admin/nodes/{name}/pair` | `{for?: "claude.ai"}` | `{code, expires, connector_url}`. Without `for` the code is unbound |
-| `GET` | `/v1/admin/signins` | | `[{id, guest, client, client_name, host, ip, created, expires}]`: clients waiting for approval |
-| `POST` | `/v1/admin/signins/{id}/approve` or `/deny` | | `{}` |
+| `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}` |
 | `GET` | `/v1/admin/contacts` | | `[{id, guest, address, created, expires}]`: open guests waiting to talk to an agent |
 | `POST` | `/v1/admin/contacts/{id}/approve` or `/deny` | | approve delivers the held message; deny answers the guest with a refusal |
 
@@ -130,40 +127,6 @@ The link is the guest's password. Anyone who has it can list your online agents 
 
 `/mcp` reads the token from `Authorization: Bearer` first and from `?key=` only when there is no header.
 
-## Signing in from a web client
-
-claude.ai, Perplexity and other assistants connect to remote MCP servers with OAuth, so the relay is also an OAuth 2.1 authorization server for its guests. It follows the [MCP authorization spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization):
-
-- `/mcp` answers an unauthenticated call with `401` and `WWW-Authenticate: Bearer resource_metadata=…`.
-- `/.well-known/oauth-protected-resource` (RFC 9728) names this host as the authorization server; `/.well-known/oauth-authorization-server` (RFC 8414) advertises PKCE `S256`, public clients only, and Client ID Metadata Documents.
-- Clients identify themselves with a Client ID Metadata Document (preferred; Dynamic Client Registration is deprecated as of MCP 2026-07-28) or register at `/oauth/register`.
-
-There is no account to log in to. The person proves they own a guest with a **pairing code**, and the same steps work for any assistant:
-
-1. In `agentnet watch`, type `/add` (or press `n` on the Guests tab): a name, then the agents it can talk to. The screen shows the connector URL and the code once.
-2. Add the URL as a custom connector in the assistant and connect. The relay's consent page shows the client and the address it returns to; type the code there.
-3. The page waits. In `watch`, the sign-in shows in Guests as waiting, with the host it returns to; select it and press `a`, or run `agentnet relay signins approve <id>`.
-
-From the command line the same is:
-
-```bash
-agentnet relay node add claude-web --kind guest --targets laptop.claude --inbox
-agentnet relay node pair claude-web             # prints the code once and the connector URL
-agentnet relay signins                          # who is waiting
-agentnet relay signins approve 0a1b2c3d
-```
-
-The code:
-
-- works once, for 10 minutes;
-- is spent when the first client uses it; that client then waits up to 10 minutes for the person's answer on their own machine. Approval happens there, not on a web page, so a code someone was tricked into typing on a stranger's sign-in gives nothing unless the person also approves a host they do not recognize;
-- can instead be bound to a host up front with `--for claude.ai`, for scripts: a client that returns anywhere else is refused and no approval is asked. A code cannot be bound to a host where anyone can get a subdomain (`workers.dev`, `vercel.app`, `github.io`, ...);
-- is stored only as a hash. Five wrong codes from one address lock that address out of the consent page for 15 minutes; nobody else's pairing is affected.
-
-Tokens: access tokens last 1 hour; refresh tokens last 30 days and rotate on every use, and presenting a used one ends the whole grant. A sign-in lasts at most 90 days however often it refreshes. Rotating or revoking the guest ends its sign-ins. Access tokens are bound to this relay's `/mcp` (RFC 8707) and resolve to the guest, so routing and limits are the same as with the static token. Revoking the guest ends all of it at once.
-
-The consent and waiting pages run no script (the waiting page reloads with `<meta http-equiv="refresh">`), cannot be framed, and its form posts only to this host. It is the only route that accepts a browser `Origin`, and only its own.
-
 ## Limits
 
 - Per node: 60 sends per minute and 2,000 per day.
@@ -171,7 +134,6 @@ The consent and waiting pages run no script (the waiting page reloads with `<met
 - Per ask: one reply.
 - Queue: at most 1,000 unacked messages per node, at most 250 of them from one sender. Messages expire after 7 days.
 - Authentication failures from one IP: 10 per 60 seconds (Workers Rate Limiting binding, per location), then 429. Valid tokens are never counted.
-- OAuth endpoints: 30 requests per minute per IP. Dynamic registration: 10 per IP per hour; at most 200 clients waiting for their first sign-in (the oldest is dropped past that), and an unused registration expires after 1 hour. At most 1,000 open consent pages.
 
 ## Local side
 

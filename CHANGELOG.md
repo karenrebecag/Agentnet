@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Removed
+
+- OAuth sign-in for web guests: the consent page, pairing codes, `/.well-known` metadata, `/oauth/*`, `agentnet relay node pair`, `agentnet relay signins` and `/pair` in watch. A web AI connects with the `/add` link alone, so clients that probe for OAuth no longer ask for a code. Guests that signed in with OAuth must be connected again with a new link from `/add`.
+
 ## [0.6.0] - 2026-11-06
 
 ### Added

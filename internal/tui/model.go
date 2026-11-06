@@ -59,11 +59,10 @@ type Model struct {
 	relayErr error
 	loaded   bool
 
-	sessions    []sessions.Session
-	signins     []relay.Signin
-	contacts    []relay.Contact
-	ticks       int
-	wizard      *wizard
+	sessions []sessions.Session
+	contacts []relay.Contact
+	ticks    int
+	wizard   *wizard
 
 	tab    tabID
 	cursor [tabCount]int
@@ -104,11 +103,11 @@ func (m Model) Init() tea.Cmd {
 }
 
 // scan refreshes what changes on its own: the open CLIs and, with a relay,
-// the clients waiting for a yes.
+// the web AIs waiting for a yes.
 func (m Model) scan() tea.Cmd {
 	cmds := []tea.Cmd{scanSessions(m.act, m.snap.Agents)}
 	if m.info.Relay != "" {
-		cmds = append(cmds, scanSignins(m.act), scanContacts(m.act))
+		cmds = append(cmds, scanContacts(m.act))
 	}
 	return tea.Batch(cmds...)
 }
@@ -133,8 +132,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions = msg.list
 		}
 		m.clampCursors()
-	case signinsMsg:
-		m.onSignins(msg)
 	case contactsMsg:
 		m.onContacts(msg)
 	case pollMsg:

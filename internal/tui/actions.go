@@ -26,16 +26,13 @@ type Actions interface {
 	AddExposeGuest(name string, targets []string) (string, error)
 	ApproveExposeGuest(name string) error
 	RevokeExposeGuest(name string) error
-	// AddWebGuest creates a relay guest with an inbox and an unbound pairing
-	// code: the person approves the client's host when it signs in.
+	// AddWebGuest creates an open relay guest and returns its connector link,
+	// which carries the key: the person allows each agent on first contact.
 	AddWebGuest(ctx context.Context, name string) (string, error)
 	// NewGuestURL replaces a web guest's link; the old one stops working.
 	NewGuestURL(ctx context.Context, name string) (string, error)
 	Contacts(ctx context.Context) ([]relay.Contact, error)
 	DecideContact(ctx context.Context, id string, approve bool) error
-	PairGuest(ctx context.Context, name string) (relay.Pairing, error)
-	Signins(ctx context.Context) ([]relay.Signin, error)
-	DecideSignin(ctx context.Context, id string, approve bool) error
 	Sessions(ctx context.Context, joined map[int]string) ([]sessions.Session, error)
 	Copy(text string) error
 	// OpenToGuests lets web guests reach a live agent on this machine until
@@ -98,22 +95,12 @@ func (l Local) NewGuestURL(ctx context.Context, name string) (string, error) {
 	return relay.GuestURL(l.Home, token)
 }
 
-func (l Local) Contacts(ctx context.Context) ([]relay.Contact, error) { return relay.ListContacts(ctx, l.Home) }
+func (l Local) Contacts(ctx context.Context) ([]relay.Contact, error) {
+	return relay.ListContacts(ctx, l.Home)
+}
 
 func (l Local) DecideContact(ctx context.Context, id string, approve bool) error {
 	return relay.DecideContact(ctx, l.Home, id, approve)
-}
-
-func (l Local) PairGuest(ctx context.Context, name string) (relay.Pairing, error) {
-	return relay.PairNode(ctx, l.Home, name, "")
-}
-
-func (l Local) Signins(ctx context.Context) ([]relay.Signin, error) {
-	return relay.ListSignins(ctx, l.Home)
-}
-
-func (l Local) DecideSignin(ctx context.Context, id string, approve bool) error {
-	return relay.DecideSignin(ctx, l.Home, id, approve)
 }
 
 func (l Local) Sessions(ctx context.Context, joined map[int]string) ([]sessions.Session, error) {

@@ -22,7 +22,6 @@ type commandSpec struct {
 
 var commandSpecs = []commandSpec{
 	{"add", "", "connect a web AI (claude.ai, Perplexity, ...): asks a name and its agents"},
-	{"pair", "<guest>", "new sign-in code for a web guest"},
 	{"node", "<name>", "add a machine"},
 	{"guest", "relay|expose <name> <targets>", "invite a guest"},
 	{"approve", "<guest>", "approve a pending expose guest"},
@@ -95,10 +94,6 @@ func (c completions) suggest(line string) []suggestion {
 			return filterList(c.addresses, last, "agent on the relay")
 		case pos == 3 && words[1] == "expose":
 			return filterList(c.localAgents, last, "local agent")
-		}
-	case "pair":
-		if pos == 1 {
-			return filter(plain(c.relayGuests, "relay guest"), last)
 		}
 	case "approve":
 		if pos == 1 {

@@ -50,7 +50,6 @@ type secretNote struct {
 	title string
 	token string
 	hint  string
-	url   string // copied with u, when there is one
 }
 
 func refresh(act Actions) tea.Cmd {
@@ -125,12 +124,6 @@ func (m Model) command(line string) (tea.Cmd, *confirmation, error) {
 			token, err := act.AddExposeGuest(name, targets)
 			return &secretNote{title: "Token for expose guest " + name, token: token,
 				hint: "Valid while agentnet expose runs. Approve the guest here when it first connects."}, err
-		}), nil, nil
-	case len(f) == 2 && f[0] == "pair":
-		name := f[1]
-		return run("new code for "+name, func(ctx context.Context) (*secretNote, error) {
-			p, err := act.PairGuest(ctx, name)
-			return pairingNote(name, p), err
 		}), nil, nil
 	case len(f) == 2 && f[0] == "approve":
 		return nil, m.guestAction("Approve", GuestRow{Name: f[1], Via: ViaExpose}), nil

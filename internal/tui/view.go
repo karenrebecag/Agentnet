@@ -155,7 +155,7 @@ func (m Model) tabs(width int) string {
 	parts := make([]string, tabCount)
 	for t := tabID(0); t < tabCount; t++ {
 		label := tabNames[t]
-		if waiting := len(m.snap.Pending) + len(m.signins) + len(m.contacts); t == tabGuests && waiting > 0 {
+		if waiting := len(m.snap.Pending) + len(m.contacts); t == tabGuests && waiting > 0 {
 			label += fmt.Sprintf(" (%d waiting)", waiting)
 		}
 		if t == m.tab {
@@ -221,8 +221,6 @@ func (m Model) keybar(width int) string {
 	switch {
 	case m.confirm != nil:
 		return warn.Render(truncate(" "+m.confirm.prompt, width)) + "\n" + renderKeys(confirmKeys, width)
-	case m.secret != nil && m.secret.url != "":
-		keys = []hotkey{{"c", "Copy code"}, {"u", "Copy URL"}, {"↵", "Close"}}
 	case m.secret != nil:
 		keys = []hotkey{{"c", "Copy"}, {"↵", "Close"}}
 	case m.detail != nil:

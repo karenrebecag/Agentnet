@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -17,11 +16,7 @@ import (
 	"time"
 )
 
-// errPairHost is a hostname check, not a relay response. IP addresses and URLs
-// are rejected so a pairing code cannot be bound to a redirect trick.
-var errPairHost = errors.New("pair host must be a hostname")
-
-var signinRE = regexp.MustCompile(`^[0-9a-f]{8}$`)
+var contactRE = regexp.MustCompile(`^[0-9a-f]{8}$`)
 
 // Node is one row of GET /v1/admin/nodes. The relay never returns token hashes.
 type Node struct {
@@ -268,174 +263,6 @@ func RevokeNode(ctx context.Context, home, name string) error {
 	return nil
 }
 
-// Pairing is a one-time code bound to a redirect host. Callers print it; nothing here stores it.
-type Pairing struct {
-	Code         string
-	Expires      string
-	ConnectorURL string
-}
-
-// PairNode asks the admin API for a pairing code. host is a hostname, not a
-// URL; "" leaves the code unbound, and the first client to use it waits for
-// ApproveSignin. The code is not written to disk.
-func PairNode(ctx context.Context, home, name, host string) (Pairing, error) {
-	body := map[string]string{}
-	if strings.TrimSpace(host) != "" {
-		h, err := normalizePairHost(host)
-		if err != nil {
-			return Pairing{}, err
-		}
-		body["for"] = h
-	}
-	if !nodeRE.MatchString(name) {
-		return Pairing{}, fmt.Errorf("%w: %q", errBadAddress, name)
-	}
-	c, _, err := adminClient(home)
-	if err != nil {
-		return Pairing{}, err
-	}
-	var out struct {
-		Code         string `json:"code"`
-		Expires      string `json:"expires"`
-		ConnectorURL string `json:"connector_url"`
-	}
-	if err := c.do(ctx, http.MethodPost, "/v1/admin/nodes/"+url.PathEscape(name)+"/pair", body, &out); err != nil {
-		return Pairing{}, err
-	}
-	if !acceptableCode(out.Code) {
-		return Pairing{}, errors.New("relay pair returned no code")
-	}
-	return presentPairing(Pairing{Code: out.Code, Expires: out.Expires, ConnectorURL: out.ConnectorURL}), nil
-}
-
-func normalizePairHost(raw string) (string, error) {
-	host := strings.ToLower(strings.TrimSpace(raw))
-	host = strings.TrimSuffix(host, ".")
-	if host == "" || len(host) > 253 || strings.Contains(host, "..") {
-		return "", errPairHost
-	}
-	if strings.ContainsAny(host, "/:@?#\\*[] \t\r\n") {
-		return "", errPairHost
-	}
-	if net.ParseIP(host) != nil || numericPairHost(host) {
-		return "", errPairHost
-	}
-	for _, label := range strings.Split(host, ".") {
-		if !pairLabelOK(label) {
-			return "", errPairHost
-		}
-	}
-	return host, nil
-}
-
-func numericPairHost(host string) bool {
-	if strings.HasPrefix(host, "0x") {
-		return true
-	}
-	labels := strings.Split(host, ".")
-	if len(labels) == 1 {
-		return allDigits(labels[0])
-	}
-	if len(labels) != 4 {
-		return false
-	}
-	for _, label := range labels {
-		if !allDigits(label) {
-			return false
-		}
-	}
-	return true
-}
-
-func allDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func pairLabelOK(label string) bool {
-	if label == "" || len(label) > 63 {
-		return false
-	}
-	for i, c := range label {
-		switch {
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-		case c == '-' && i > 0 && i < len(label)-1:
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func acceptableCode(code string) bool {
-	if code == "" || len(code) > 64 {
-		return false
-	}
-	for _, r := range code {
-		if r <= ' ' || r >= 0x7f {
-			return false
-		}
-	}
-	return true
-}
-
-func presentPairing(p Pairing) Pairing {
-	u, err := url.Parse(p.ConnectorURL)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Contains(p.ConnectorURL, p.Code) {
-		p.ConnectorURL = ""
-	}
-	if _, err := time.Parse(time.RFC3339, p.Expires); err != nil || strings.Contains(p.Expires, p.Code) {
-		p.Expires = ""
-	}
-	return p
-}
-
-// Signin is a client that used an unbound code and waits for a yes. Host is
-// where the client returns: it is the one field worth reading before approving.
-type Signin struct {
-	ID         string `json:"id"`
-	Guest      string `json:"guest"`
-	Client     string `json:"client"`
-	ClientName string `json:"client_name"`
-	Host       string `json:"host"`
-	IP         string `json:"ip"`
-	Created    string `json:"created"`
-	Expires    string `json:"expires"`
-}
-
-func ListSignins(ctx context.Context, home string) ([]Signin, error) {
-	c, _, err := adminClient(home)
-	if err != nil {
-		return nil, err
-	}
-	var out []Signin
-	err = c.do(ctx, http.MethodGet, "/v1/admin/signins", nil, &out)
-	return out, err
-}
-
-// DecideSignin approves or denies a waiting sign-in.
-func DecideSignin(ctx context.Context, home, id string, approve bool) error {
-	if !signinRE.MatchString(id) {
-		return fmt.Errorf("sign-in id must be 8 hex characters, got %q", id)
-	}
-	c, _, err := adminClient(home)
-	if err != nil {
-		return err
-	}
-	verb := "deny"
-	if approve {
-		verb = "approve"
-	}
-	return c.do(ctx, http.MethodPost, "/v1/admin/signins/"+id+"/"+verb, map[string]any{}, nil)
-}
-
 // Contact is an open guest's first message to an agent, waiting for a yes.
 type Contact struct {
 	ID      string `json:"id"`
@@ -457,7 +284,7 @@ func ListContacts(ctx context.Context, home string) ([]Contact, error) {
 
 // DecideContact allows or refuses a waiting contact. Allowing delivers the held message.
 func DecideContact(ctx context.Context, home, id string, approve bool) error {
-	if !signinRE.MatchString(id) {
+	if !contactRE.MatchString(id) {
 		return fmt.Errorf("contact id must be 8 hex characters, got %q", id)
 	}
 	c, _, err := adminClient(home)
