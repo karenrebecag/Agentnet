@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - `watch`: the Agents tab also lists the agent CLIs open on this machine that have not joined (Claude Code, Grok, Codex, Gemini, ...). Enter on one copies a join line to paste into that session, the same for every CLI; `e` copies one that also accepts web guests.
