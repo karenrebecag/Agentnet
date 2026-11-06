@@ -24,7 +24,9 @@ Status: draft for v0.3. This document is the contract between the relay (`relay/
 - `machine`: a computer running `agentnet link`. It is a full member: it hosts agents, sends and receives.
 - `guest`: a remote assistant, such as a web app connector, that only speaks MCP. It can only ask the agents it is allowed to ask.
 
-**Address.** Agents are addressed as `<node>.<agent>`, for example `laptop.claude-api`. A node name matches `^[a-z][a-z0-9-]{0,31}$`; the agent part follows the local name rules. The relay stamps `from` on every envelope: a client can never choose it.
+**Address.** Agents are addressed as `<node>.<agent>`, for example `laptop.claude-api`. A node name matches `^[a-z][a-z0-9-]{0,31}$` and has no dots, so an address always splits at its first dot; the agent part follows the local name rules and may contain dots. The node names `ext` and `local` are reserved: `ext.<guest>` is already used by `expose` for local guest inboxes.
+
+The relay stamps `from` on every envelope as `<authenticated node>.<agent>`. A machine names the sending agent in each `send`, and the relay accepts it only if that agent is in the node's current announced list. A machine cannot send as another node.
 
 **Origin.** Every envelope delivered by the relay carries `origin`:
 
@@ -60,10 +62,10 @@ Frames are JSON text. The client sends:
 
 | type | fields | meaning |
 |---|---|---|
-| `hello` | `agents: [{name, kind, accept_external}]`, `after: seq` | Announce the local agents that are live, and resume delivery after `seq` |
+| `hello` | `agents: [{name, kind, accept_external}]` | Announce the local agents that are live. Delivery resumes from the relay's own record of the last ack |
 | `agents` | `agents: [...]` | Replace the announced agent list |
-| `send` | `ref, to, text, reply_to?` | Send. `ref` is a client id echoed in `sent` |
-| `ack` | `seq` | Everything up to `seq` was written to a local inbox |
+| `send` | `ref, from, to, text, reply_to?` | Send as local agent `from` (must be announced). `ref` is a client id echoed in `sent` |
+| `ack` | `seq` | Cumulative: every message up to `seq` was written to a local inbox. A client never acks past a message it has not written |
 
 The relay sends:
 
@@ -71,10 +73,10 @@ The relay sends:
 |---|---|---|
 | `welcome` | `node` | Authenticated as this node |
 | `deliver` | `seq, envelope` | One message for an agent of this node. Repeated until acked |
-| `sent` | `ref, id, status` | `status` is `delivered` (recipient node online), `queued`, or `rejected` with `error` |
+| `sent` | `ref, id, status, error?` | `status` is `delivered` (recipient node online), `queued`, or `rejected`; a rejection carries `error` in the same frame and has no `id` |
 | `error` | `code, message` | A protocol error. Fatal errors are followed by a close |
 
-Delivery is at least once. The client deduplicates by `envelope.id`, writes the message to the local inbox, then acks.
+Delivery is at least once. On every connection the relay redelivers everything after the last ack, so a client cannot skip mail it never acknowledged. The client deduplicates by `envelope.id`, writes the message to the local inbox, then acks.
 
 ## Guests: `POST /mcp`
 
@@ -96,7 +98,7 @@ Authenticated with `ADMIN_TOKEN`.
 | method | path | body | result |
 |---|---|---|---|
 | `POST` | `/v1/admin/nodes` | `{name, kind, targets?}` | `{name, token}` |
-| `GET` | `/v1/admin/nodes` | | nodes without hashes |
+| `GET` | `/v1/admin/nodes` | | `[{name, kind, targets, revoked, created, last_seen, agents}]`, never token hashes |
 | `POST` | `/v1/admin/nodes/{name}/rotate` | | `{token}` |
 | `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}` |
 
@@ -109,7 +111,7 @@ Authenticated with `ADMIN_TOKEN`.
 
 ## Local side
 
-`agentnet link` reads `~/.agentnet/relay.json` (mode 0600):
+`agentnet link` reads `~/.agentnet/relay.json` (mode 0600). The admin token lives in a separate file, `~/.agentnet/relay-admin.json` (also 0600), which `link` never reads, so a compromised link process cannot manage nodes:
 
 ```json
 {"url":"https://agentnet.<you>.workers.dev","node":"laptop","token":"an_…"}
@@ -119,7 +121,7 @@ The link process has three jobs:
 
 1. **Announce local agents.** It sends the live local agents in `hello` and `agents`. An agent is offered to guests only if it joined with `--accept-external`.
 2. **Bring remote mail in.** Each `deliver` is written to the local inbox of the target agent, with the global `from` and `origin` kept.
-3. **Send local mail out.** A local agent writes to `desktop.codex` as usual. For every remote address it learns about, link registers a local inbox under that name and forwards what lands there.
+3. **Send local mail out.** A local agent writes to `desktop.codex` as usual. Link watches the inbox directory for any name shaped like `<node>.<agent>` whose node is not its own and not reserved, takes it as reader, and forwards what lands there. There is no directory lookup first: an unknown node comes back as `rejected`, and link writes that rejection to the sender's inbox.
 
 Without the link process, the local network works exactly as before.
 
