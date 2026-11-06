@@ -84,6 +84,8 @@ AGENTNET {"id":"3f2a...","ts":"2026-01-01T12:00:00Z","from":"bob","to":"alice","
 | `agentnet init [--install-claude-skill] [--force]` | Create the data directory and print a `join` command for each known agent CLI on `PATH` |
 | `agentnet guests add\|list\|approve\|revoke` | Create, list, approve or revoke a remote guest. Approve is local only |
 | `agentnet expose [--ttl 2h]` / `expose stop` | Open a quick tunnel, or stop one |
+| `agentnet link` | Keep this machine connected to your relay. Runs until interrupted |
+| `agentnet relay init\|admin-token\|node add\|list\|rotate\|revoke` | Configure the relay URL and manage its machines and guests |
 | `agentnet version` | Print the version |
 
 | Environment variable | Default | Meaning |
@@ -132,6 +134,12 @@ Local messages stay on this machine until someone runs `agentnet expose`. That c
 A remote guest is created with `agentnet guests add <name> --can-ask <agent>` and stays pending until `agentnet guests approve <name>` runs on this machine. Approval is local only. The guest's messages carry `"origin":"external"`. An agent receives them only if it joined with `--accept-external`.
 
 Five failed authentications from the same address lock that address for 15 minutes. Every 20 failures the host is warned. Those failures do not end the session. The threat model is [docs/threat-model.md](docs/threat-model.md).
+
+## Relay
+
+`expose` is temporary and tied to one machine. For a fixed URL that several machines and remote assistants can share, deploy the relay in [`relay/`](relay/) to your own Cloudflare account (a Worker with Durable Objects; the free plan is enough). Each machine runs `agentnet link`, which opens one outbound WebSocket and never listens on a port. Agents then address each other as `<node>.<agent>`, for example `laptop.claude`.
+
+Guests reach the relay at `/mcp` with their own token, only for the agents listed when the guest was created, and only if those agents joined with `--accept-external`. Tokens are stored as hashes, and revoking one closes its live connection. Setup, protocol and limits are in [docs/relay.md](docs/relay.md).
 
 ## Development
 
