@@ -27,6 +27,8 @@ var (
 	errConfig   = errors.New("relay config rejected")
 	errGap      = errors.New("relay sequence gap")
 	errPoll     = errors.New("poll")
+	// A redirect can move the bearer from https onto cleartext on the same host.
+	errRedirect = errors.New("relay redirect refused")
 )
 
 // Conn is the websocket surface the session needs. Tests substitute it.
@@ -476,14 +478,8 @@ func (w wsConn) Close() error {
 }
 
 func defaultDial(ctx context.Context, rawURL, token string) (Conn, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" || u.User != nil {
-		return nil, errConfig
-	}
-	// The bearer token must not cross a network in cleartext. Loopback stays
-	// open so a local test server can speak http.
-	if u.Scheme == "http" && !isLoopback(u.Hostname()) {
-		return nil, fmt.Errorf("%w: cleartext relay url", errConfig)
+	if err := checkRelayBase(rawURL); err != nil {
+		return nil, err
 	}
 	link, err := LinkURL(rawURL)
 	if err != nil {
@@ -492,12 +488,16 @@ func defaultDial(ctx context.Context, rawURL, token string) (Conn, error) {
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	c, resp, err := websocket.Dial(dctx, link, &websocket.DialOptions{
+		HTTPClient: &http.Client{CheckRedirect: refuseRedirect},
 		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + token}},
 	})
 	if err != nil {
 		// A bad credential must not reconnect in a loop.
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 			return nil, errRevoked
+		}
+		if errors.Is(err, errRedirect) {
+			return nil, fmt.Errorf("%w: redirect", errConfig)
 		}
 		return nil, err
 	}
@@ -512,4 +512,28 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// checkRelayBase rejects a URL that would send a bearer off-box in cleartext.
+// Loopback http stays open for a local test server.
+func checkRelayBase(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return errConfig
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopback(u.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("%w: cleartext relay url", errConfig)
+	default:
+		return errConfig
+	}
+}
+
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return errRedirect
 }

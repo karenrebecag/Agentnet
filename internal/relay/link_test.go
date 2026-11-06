@@ -128,6 +128,28 @@ func TestReplayOfAckedSeqIsAckedAgain(t *testing.T) {
 	}
 }
 
+func TestDialDoesNotFollowRedirect(t *testing.T) {
+	hit := false
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			hit = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(sink.Close)
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, sink.URL+"/steal", http.StatusFound)
+	}))
+	t.Cleanup(src.Close)
+	_, err := defaultDial(context.Background(), src.URL, "an_secret")
+	if !errors.Is(err, errConfig) {
+		t.Fatalf("err = %v", err)
+	}
+	if hit {
+		t.Fatal("bearer reached the redirect target")
+	}
+}
+
 func TestLinkDeliverDedupesAndLeavesAdminAlone(t *testing.T) {
 	const token = "an_secret"
 	const relayID = "0123456789abcdef0123456789abcdef"

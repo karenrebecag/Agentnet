@@ -40,9 +40,14 @@ type Client struct {
 
 func (c Client) http() *http.Client {
 	if c.HTTP != nil {
-		return c.HTTP
+		if c.HTTP.CheckRedirect != nil {
+			return c.HTTP
+		}
+		clone := *c.HTTP
+		clone.CheckRedirect = refuseRedirect
+		return &clone
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: refuseRedirect}
 }
 
 func (c Client) Add(ctx context.Context, name, kind string, targets []string) (string, error) {
@@ -79,6 +84,9 @@ func (c Client) do(ctx context.Context, method, path string, body, out any) erro
 	if c.Token == "" {
 		return errors.New("missing admin token")
 	}
+	if err := checkRelayBase(c.BaseURL); err != nil {
+		return err
+	}
 	var r io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -98,6 +106,9 @@ func (c Client) do(ctx context.Context, method, path string, body, out any) erro
 	}
 	resp, err := c.http().Do(req)
 	if err != nil {
+		if errors.Is(err, errRedirect) {
+			return fmt.Errorf("%w: redirect", errConfig)
+		}
 		return err
 	}
 	defer resp.Body.Close()

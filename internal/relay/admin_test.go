@@ -5,6 +5,7 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -100,5 +101,40 @@ func TestAdminRoundTripAndLocalFile(t *testing.T) {
 	f, _ = Load(home)
 	if f.Token != "" || f.Node != "laptop" {
 		t.Fatalf("revoke %+v", f)
+	}
+}
+
+func TestAdminDoesNotFollowRedirect(t *testing.T) {
+	hit := false
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			hit = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(sink.Close)
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, sink.URL+"/steal", http.StatusFound)
+	}))
+	t.Cleanup(src.Close)
+	err := Client{BaseURL: src.URL, Token: "an_admin"}.Revoke(context.Background(), "laptop")
+	if !errors.Is(err, errConfig) {
+		t.Fatalf("err = %v", err)
+	}
+	if hit {
+		t.Fatal("bearer reached the redirect target")
+	}
+}
+
+func TestAdminCleartextIsRejected(t *testing.T) {
+	home := t.TempDir()
+	if err := Save(home, File{URL: "http://example.test", Node: "laptop", Token: "an_node"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivate(adminPath(home), []byte("{\"token\":\"an_admin\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ListNodes(context.Background(), home); !errors.Is(err, errConfig) {
+		t.Fatalf("err = %v", err)
 	}
 }

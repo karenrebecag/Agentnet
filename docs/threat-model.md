@@ -26,7 +26,7 @@ Cinco autenticaciones fallidas desde la misma dirección la bloquean 15 minutos.
 
 `agentnet link` solo arranca cuando la persona lo ejecuta. La conexión sale de la máquina; la máquina no abre un puerto. Sin ese proceso la red local sigue igual.
 
-El token del nodo está en `relay.json` (0600). El token de admin está en `relay-admin.json` (0600). `link` no lee el archivo de admin, así que un proceso de link comprometido no administra nodos.
+El token del nodo está en `relay.json` (0600). El token de admin está en `relay-admin.json` (0600). `link` no lee el archivo de admin, así que un proceso de link comprometido no administra nodos. Ninguno de los dos clientes sigue redirecciones: un 302 del mismo host reenvía el bearer de https a http. Una URL http que no sea loopback se rechaza.
 
 `origin: external` sigue siendo datos de un tercero. `origin: relay` viene de otra máquina de la misma persona y tampoco es una instrucción suya.
 
