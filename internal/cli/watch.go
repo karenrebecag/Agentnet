@@ -13,9 +13,11 @@ import (
 	"github.com/karenrebecag/agentnet/internal/tui"
 )
 
+// No mouse capture: watch has no mouse actions, and capturing it would stop
+// the terminal from selecting text such as a code or a URL.
 func (e env) watch() (int, error) {
 	guestsPath, _, _ := e.paths()
-	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath), tui.Local{Home: e.store.Home, GuestsPath: guestsPath}, e.watchInfo()), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath), tui.Local{Home: e.store.Home, GuestsPath: guestsPath}, e.watchInfo()), tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		return ExitError, err
 	}

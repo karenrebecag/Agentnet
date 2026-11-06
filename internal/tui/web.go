@@ -244,10 +244,19 @@ func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) copyText(text, what string) {
+	if err := m.act.Copy(text); err != nil {
+		m.setStatus(err.Error(), true)
+		return
+	}
+	m.setStatus(what+" copied", false)
+}
+
 func pairingNote(guest string, p relay.Pairing) *secretNote {
 	return &secretNote{
 		title: "Connect a web AI as " + guest,
 		token: p.Code,
+		url:   p.ConnectorURL,
 		hint: strings.Join([]string{
 			"1. In the AI, add a custom connector (MCP) with this URL:",
 			"   " + orDefault(p.ConnectorURL, "<relay>/mcp"),

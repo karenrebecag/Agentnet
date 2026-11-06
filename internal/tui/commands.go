@@ -50,6 +50,7 @@ type secretNote struct {
 	title string
 	token string
 	hint  string
+	url   string // copied with u, when there is one
 }
 
 func refresh(act Actions) tea.Cmd {

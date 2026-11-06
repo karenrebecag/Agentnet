@@ -221,7 +221,11 @@ func (m Model) keybar(width int) string {
 	switch {
 	case m.confirm != nil:
 		return warn.Render(truncate(" "+m.confirm.prompt, width)) + "\n" + renderKeys(confirmKeys, width)
-	case m.secret != nil || m.detail != nil:
+	case m.secret != nil && m.secret.url != "":
+		keys = []hotkey{{"c", "Copy code"}, {"u", "Copy URL"}, {"↵", "Close"}}
+	case m.secret != nil:
+		keys = []hotkey{{"c", "Copy"}, {"↵", "Close"}}
+	case m.detail != nil:
 		keys = overlayKeys
 	case m.mode == inputCommand:
 		keys = commandKeys
