@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `link` reconnected about every second and a half: each poll gave the websocket read a deadline, and the library closes the connection when a read's context ends. Agents showed as offline to web guests and asks stayed queued. The read now outlives the poll.
+- Relay: tool descriptions ask web clients for waits of 10 s or less and a `get_reply` loop, since some clients cut tool calls under 30 s.
+
 ## [0.5.2] - 2026-11-06
 
 ### Changed

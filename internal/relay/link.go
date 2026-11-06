@@ -130,9 +130,13 @@ func runOnce(ctx context.Context, opt Options, dial func(context.Context, string
 		return false, err
 	}
 	defer conn.Close()
+	// The pending read lives as long as this connection, not one poll.
+	readCtx, stopReading := context.WithCancel(ctx)
+	defer stopReading()
 	s := &session{
 		conn: conn, store: opt.Store, node: opt.File.Node,
 		seen: map[string]struct{}{}, poll: poll,
+		readCtx: readCtx, frames: make(chan frame, 1),
 	}
 	in, err := s.readFor(ctx, 0)
 	if err != nil {
@@ -178,6 +182,14 @@ type session struct {
 	announced []announced
 	out       *outbound
 	rr        int
+	readCtx   context.Context
+	frames    chan frame
+	reading   bool
+}
+
+type frame struct {
+	b   []byte
+	err error
 }
 
 func (s *session) on(ctx context.Context, in incoming) error {
@@ -419,18 +431,35 @@ func (s *session) write(ctx context.Context, v any) error {
 	return s.conn.Write(ctx, raw)
 }
 
+// readFor waits up to d for the next frame. The read itself is never given a
+// deadline: the websocket library closes the connection when a read's context
+// ends, so a poll timeout on the read dropped the link every poll interval.
+// The read runs on its own and outlives the poll; the next call picks it up.
 func (s *session) readFor(parent context.Context, d time.Duration) (incoming, error) {
-	ctx := parent
-	if d > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(parent, d)
-		defer cancel()
+	if !s.reading {
+		s.reading = true
+		go func() {
+			b, err := s.conn.Read(s.readCtx)
+			s.frames <- frame{b, err}
+		}()
 	}
-	b, err := s.conn.Read(ctx)
+	var timeout <-chan time.Time
+	if d > 0 {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		timeout = t.C
+	}
+	var f frame
+	select {
+	case f = <-s.frames:
+		s.reading = false
+	case <-timeout:
+		return incoming{}, errPoll
+	case <-parent.Done():
+		return incoming{}, parent.Err()
+	}
+	b, err := f.b, f.err
 	if err != nil {
-		if d > 0 && parent.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			return incoming{}, errPoll
-		}
 		return incoming{}, closeFatal(err)
 	}
 	var in incoming

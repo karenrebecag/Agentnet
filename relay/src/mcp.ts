@@ -6,6 +6,8 @@ import { type Env, type Envelope, type NodeRecord, GUEST_AGENT, json, randomHex,
 
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const DEFAULT_WAIT = 30;
+// The cap stays at 50 for clients that allow long calls; the descriptions ask
+// for 10, because some clients (Perplexity) cut a tool call well under 30 s.
 const MAX_WAIT = 50;
 const MAX_BODY = 32 * 1024;
 
@@ -25,7 +27,7 @@ const TOOLS = [
   {
     name: "ask",
     description:
-      "Send a message to an agent and wait up to wait_seconds (max 50) for its reply. If it has not answered yet, call get_reply with the returned id.",
+      "Send a message to an agent and wait up to wait_seconds for its reply. Use 10 or less: some clients cut longer tool calls. If it has not answered yet, call get_reply with the returned id, again with a short wait, as many times as needed.",
     inputSchema: {
       type: "object",
       properties: {
@@ -39,7 +41,7 @@ const TOOLS = [
   },
   {
     name: "get_reply",
-    description: "Fetch the reply to an earlier ask, waiting up to wait_seconds (max 50).",
+    description: "Fetch the reply to an earlier ask, waiting up to wait_seconds. Use 10 or less and call again to keep waiting.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string" }, wait_seconds: { type: "integer", minimum: 0, maximum: MAX_WAIT } },
@@ -62,7 +64,7 @@ const INBOX_TOOLS = [
   {
     name: "wait",
     description:
-      "Wait up to wait_seconds (max 50) for the next unsolicited message from your agents. Call it again to keep listening.",
+      "Wait up to wait_seconds for the next unsolicited message from your agents. Use 10 or less and call it again to keep listening.",
     inputSchema: {
       type: "object",
       properties: { wait_seconds: { type: "integer", minimum: 0, maximum: MAX_WAIT } },
