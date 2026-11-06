@@ -249,3 +249,18 @@ func TestEnterOnAnUnjoinedCLICopiesItsJoinLine(t *testing.T) {
 		t.Fatalf("calls = %v", act.calls)
 	}
 }
+
+func TestAddWithAnExistingNameReconnectsOrRenames(t *testing.T) {
+	act := &fakeActions{}
+	m := drive(t, newTestModel(act), "right", "right", "n")
+	drive(t, m, append(splitKeys("perplexity"), "enter")...)
+	if strings.Join(act.calls, ";") != "pair perplexity" {
+		t.Fatalf("a live guest of that name must get a new code, calls = %v", act.calls)
+	}
+	act = &fakeActions{}
+	m = drive(t, newTestModel(act), "right", "right", "n")
+	m = drive(t, m, append(splitKeys("mac"), "enter")...)
+	if m.wizard == nil || m.wizard.name != "mac-2" {
+		t.Fatalf("a taken name must move to the next free one: %+v", m.wizard)
+	}
+}

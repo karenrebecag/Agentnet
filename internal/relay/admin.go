@@ -130,6 +130,13 @@ func (c Client) do(ctx context.Context, method, path string, body, out any) erro
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// The relay explains itself in {"error": "..."}; the status line is noise next to it.
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
+			return fmt.Errorf("relay: %s", e.Error)
+		}
 		return fmt.Errorf("relay admin %s: %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 	if out == nil || len(bytes.TrimSpace(raw)) == 0 {

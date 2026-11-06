@@ -53,7 +53,8 @@ func (m Model) View() string {
 // are and what happened on top, the input line below.
 func (m Model) prompt(width int) string {
 	where := name.Render(orDefault(m.info.Node, "local")) + dim.Render(" › ") + tab_.Render(tabNames[m.tab])
-	state := m.state()
+	// The status shares the top line with where you are; it gets what is left.
+	state := m.state(max(24, width-lipgloss.Width(where)-12))
 	gap := max(1, width-lipgloss.Width(where)-lipgloss.Width(state)-8)
 	first := border.Render("╭─ ") + where + " " + border.Render(strings.Repeat("─", gap)) + " " + state + border.Render(" ─╮")
 
@@ -80,14 +81,14 @@ func (m Model) prompt(width int) string {
 	return first + "\n" + second
 }
 
-func (m Model) state() string {
+func (m Model) state(room int) string {
 	switch {
 	case m.busy:
 		return section.Render("working…")
 	case m.status != "" && m.statusErr:
-		return down.Render(truncate("✗ "+m.status, 48))
+		return down.Render(truncate("✗ "+m.status, room))
 	case m.status != "":
-		return up.Render(truncate("✔ "+m.status, 48))
+		return up.Render(truncate("✔ "+m.status, room))
 	}
 	live := 0
 	for _, a := range m.snap.Agents {

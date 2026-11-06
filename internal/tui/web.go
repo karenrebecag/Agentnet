@@ -196,8 +196,7 @@ func (m Model) wizardEnter() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.wizard.step == 0 {
-		m.wizard = &wizard{step: 1, name: answer}
-		return m, nil
+		return m.wizardName(answer)
 	}
 	name, targets := m.wizard.name, splitTargets(answer)
 	m.wizard, m.mode = nil, inputOff
@@ -208,6 +207,41 @@ func (m Model) wizardEnter() (tea.Model, tea.Cmd) {
 		p, err := act.AddWebGuest(ctx, name, targets)
 		return pairingNote(name, p), err
 	})
+}
+
+// wizardName handles a name that is already taken. A live guest of that name
+// is the same AI coming back, so it gets a new code. A name the relay will not
+// hand out again (a machine, a revoked guest) moves to the next free one.
+func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
+	used := map[string]bool{}
+	for _, n := range m.nodes {
+		used[n.Name] = true
+	}
+	for _, g := range m.guests {
+		if g.Via != ViaRelay {
+			continue
+		}
+		if g.Name == name && g.State != "revoked" {
+			m.wizard, m.mode = nil, inputOff
+			m.input.Blur()
+			m.busy = true
+			act := m.act
+			return m, run(name+" already exists: new code for it", func(ctx context.Context) (*secretNote, error) {
+				p, err := act.PairGuest(ctx, name)
+				return pairingNote(name, p), err
+			})
+		}
+		used[g.Name] = true
+	}
+	free := name
+	for i := 2; used[free]; i++ {
+		free = fmt.Sprintf("%s-%d", name, i)
+	}
+	if free != name {
+		m.setStatus(fmt.Sprintf("%s was used before and names are not reused: using %s", name, free), false)
+	}
+	m.wizard = &wizard{step: 1, name: free}
+	return m, nil
 }
 
 func pairingNote(guest string, p relay.Pairing) *secretNote {
