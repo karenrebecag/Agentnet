@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -431,3 +432,53 @@ func (c *replyConn) Read(context.Context) ([]byte, error) {
 }
 
 func (c *replyConn) Close() error { return nil }
+
+// cancelClosesConn behaves like coder/websocket: a read whose context ends
+// closes the connection, so the next read fails.
+type cancelClosesConn struct {
+	mu     sync.Mutex
+	reads  int
+	closed bool
+}
+
+func (c *cancelClosesConn) Read(ctx context.Context) ([]byte, error) {
+	c.mu.Lock()
+	c.reads++
+	n, closed := c.reads, c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, errors.New("closed")
+	}
+	if n == 1 {
+		return json.Marshal(map[string]string{"type": "welcome", "node": "laptop"})
+	}
+	<-ctx.Done()
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (c *cancelClosesConn) Write(context.Context, []byte) error { return nil }
+func (c *cancelClosesConn) Close() error                        { return nil }
+
+func TestPollingDoesNotCancelTheRead(t *testing.T) {
+	conn := &cancelClosesConn{}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	dials := 0
+	Run(ctx, Options{
+		Store: core.Store{Home: t.TempDir()},
+		File:  File{URL: "http://example.test", Node: "laptop", Token: "an_secret"},
+		Poll:  5 * time.Millisecond,
+		Sleep: func(context.Context, time.Duration) error { return nil },
+		Dial: func(context.Context, string, string) (Conn, error) {
+			dials++
+			return conn, nil
+		},
+	})
+	// Dozens of polls ran; one connection and one pending read must cover them.
+	if dials != 1 {
+		t.Fatalf("the link reconnected %d times while only polling", dials-1)
+	}
+}
