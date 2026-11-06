@@ -1,0 +1,20 @@
+// No account_id here on purpose: wrangler takes it from your login or from
+// CLOUDFLARE_ACCOUNT_ID, so this file is safe to keep in a public repository.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "agentnet-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-20",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "DIRECTORY", "class_name": "Directory" },
+      { "name": "MAILBOX", "class_name": "Mailbox" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Directory", "Mailbox"] }],
+  "ratelimits": [
+    { "name": "AUTH_FAILURES", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

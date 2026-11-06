@@ -107,7 +107,7 @@ Authenticated with `ADMIN_TOKEN`.
 - Per node: 60 sends per minute and 2,000 per day.
 - Per guest: 10 asks per minute and 100 per day, with 4 calls in flight.
 - Queue: at most 1,000 unacked messages per node. Messages expire after 7 days.
-- Authentication failures from one IP: 5 per 15 minutes, then 429.
+- Authentication failures from one IP: 10 per 60 seconds (Workers Rate Limiting binding, per location), then 429. Valid tokens are never counted.
 
 ## Local side
 
