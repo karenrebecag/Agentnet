@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- `watch` is now a network manager: tabs for agents, relay nodes, guests and messages, a filter, and actions on the selected row (add, rotate, revoke, approve). The same actions run as `/` commands with zsh-style completion of node names and `node.agent` addresses. Destructive actions ask first, and a new token is shown once and never logged. Expose and relay guests stay separate, so an action always reaches the store its row came from.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added
