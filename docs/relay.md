@@ -115,7 +115,7 @@ Authenticated with `ADMIN_TOKEN`.
 `agentnet link` reads `~/.agentnet/relay.json` (mode 0600). The admin token lives in a separate file, `~/.agentnet/relay-admin.json` (also 0600), which `link` never reads, so a compromised link process cannot manage nodes:
 
 ```json
-{"url":"https://agentnet.<you>.workers.dev","node":"laptop","token":"an_…"}
+{"url":"https://agentnet-relay.<subdomain>.workers.dev","node":"laptop","token":"an_…"}
 ```
 
 The link process has three jobs:
@@ -133,11 +133,14 @@ Nothing in the repository is tied to an account. You deploy to your own Cloudfla
 ```bash
 cd relay
 npm ci
-npx wrangler login                            # your account, in your browser
-npx wrangler secret put ADMIN_TOKEN           # paste the output of: agentnet relay admin-token
-npx wrangler deploy
-agentnet relay init --url https://agentnet.<you>.workers.dev
-agentnet relay node add laptop --kind machine
+npx wrangler login                                       # your account, in your browser
+npx wrangler deploy                                      # prints https://agentnet-relay.<subdomain>.workers.dev
+agentnet relay admin-token | npx wrangler secret put ADMIN_TOKEN
+agentnet relay init --url https://agentnet-relay.<subdomain>.workers.dev
+agentnet relay node add laptop --kind machine            # saves the machine token to relay.json
+agentnet link
 ```
+
+`admin-token` writes the token to `~/.agentnet/relay-admin.json` and prints it once, so piping it into `wrangler` keeps it off the screen. A guest is a node too: `agentnet relay node add <name> --kind guest --targets laptop.claude` prints its token, which goes in the remote assistant's connector as a Bearer header for `https://agentnet-relay.<subdomain>.workers.dev/mcp`.
 
 The Worker URL, the account and every token stay in local files that git ignores.

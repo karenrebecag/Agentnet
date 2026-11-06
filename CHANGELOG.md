@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+### Added
+
+- Relay: a Cloudflare Worker (`relay/`) with one Durable Object per node, so machines on different networks and remote assistants can reach each other through a fixed URL you deploy to your own account.
+- `link`: keeps a machine connected to the relay over one outbound WebSocket, with at-least-once delivery and replay from the last ack.
+- `relay init|admin-token|node add|list|rotate|revoke`: relay configuration and node management. Tokens live in 0600 files.
+- Relay guests use the same MCP tools as `expose` (`list_agents`, `ask`, `get_reply`) at `/mcp`.
+
 ## [0.2.1] - 2026-11-05
 
 ### Fixed
