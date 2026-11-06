@@ -140,6 +140,31 @@ describe("sign-in", () => {
     expect(await res.text()).toContain("That code is for perplexity.ai, but this client returns to claude.ai");
   });
 
+  it("lets the browser send its own origin with the consent form", async () => {
+    const { challenge } = await pkce();
+    const q = new URLSearchParams({
+      response_type: "code", client_id: await registerClient(), redirect_uri: CLAUDE_CB, code_challenge: challenge, code_challenge_method: "S256",
+    });
+    const res = await SELF.fetch(`${BASE}/oauth/authorize?${q}`, { headers: ip() });
+    // no-referrer would make the browser post Origin: null, which the relay refuses.
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
+  });
+
+  it("reads a code typed one character per slot", async () => {
+    const g = await guest(["m.claude"]);
+    const { challenge } = await pkce();
+    const request = await consent(await registerClient(), challenge);
+    const chars = (await pair(g.name, "claude.ai")).replace("-", "").split("");
+    const body = new URLSearchParams({ request, action: "approve" });
+    chars.forEach((c, i) => body.set(`c${i}`, c.toLowerCase()));
+    const res = await SELF.fetch(`${BASE}/oauth/authorize`, {
+      method: "POST", redirect: "manual",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: BASE, ...ip() },
+      body: body.toString(),
+    });
+    expect(res.status).toBe(303);
+  });
+
   it("refuses the consent form from another origin", async () => {
     const g = await guest(["m.claude"]);
     const { challenge } = await pkce();

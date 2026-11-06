@@ -62,12 +62,23 @@ func (m *Model) onSignins(msg signinsMsg) {
 	for i := range msg.list {
 		msg.list[i].ClientName, msg.list[i].Host = printable(msg.list[i].ClientName), printable(msg.list[i].Host)
 	}
-	for _, s := range msg.list {
-		if !known[s.ID] {
-			m.setStatus(fmt.Sprintf("%s wants in as %s: Guests tab, a to approve", s.Host, s.Guest), false)
+	m.signins = msg.list
+	for i, s := range msg.list {
+		if known[s.ID] {
+			continue
+		}
+		m.setStatus(fmt.Sprintf("%s wants in as %s", s.Host, s.Guest), false)
+		// The code screen for this guest has done its job once a client used the code.
+		if m.secret != nil && strings.HasSuffix(m.secret.title, " as "+s.Guest) {
+			m.secret = nil
+		}
+		// Ask right away instead of leaving a row to find, unless the person is
+		// in the middle of something else.
+		if m.confirm == nil && m.secret == nil && m.detail == nil && m.mode == inputOff {
+			m.tab, m.cursor[tabGuests] = tabGuests, i
+			m.confirm = m.signinAction(true, s)
 		}
 	}
-	m.signins = msg.list
 	m.clampCursors()
 }
 
@@ -204,9 +215,10 @@ func pairingNote(guest string, p relay.Pairing) *secretNote {
 		title: "Connect a web AI as " + guest,
 		token: p.Code,
 		hint: strings.Join([]string{
-			"1. In the AI, add a custom connector (MCP) with this URL: " + orDefault(p.ConnectorURL, "<relay>/mcp"),
+			"1. In the AI, add a custom connector (MCP) with this URL:",
+			"   " + orDefault(p.ConnectorURL, "<relay>/mcp"),
 			"2. Connect. On the relay's page, type the code above.",
-			"3. Come back here: the sign-in shows in Guests as waiting. Select it and press a.",
+			"3. Come back here: watch asks you to approve the sign-in.",
 			"The code works once, for 10 minutes. /pair " + guest + " makes a new one.",
 		}, "\n"),
 	}
