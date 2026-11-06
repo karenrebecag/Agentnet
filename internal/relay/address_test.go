@@ -26,7 +26,7 @@ func TestParseAddress(t *testing.T) {
 			t.Fatalf("%q err = %v", in, err)
 		}
 	}
-	for _, in := range []string{"ext.guest", "local.claude"} {
+	for _, in := range []string{"ext.guest", "local.claude", "admin.claude"} {
 		if _, _, err := ParseAddress(in); !errors.Is(err, errReserved) {
 			t.Fatalf("%q err = %v", in, err)
 		}

@@ -28,7 +28,8 @@ func ParseAddress(addr string) (node, agent string, err error) {
 	if !ok {
 		return "", "", errBadAddress
 	}
-	if node == "ext" || node == "local" {
+	// "admin" is reserved by the Worker even though the docs name only ext and local.
+	if node == "ext" || node == "local" || node == "admin" {
 		return "", "", errReserved
 	}
 	return node, agent, nil
