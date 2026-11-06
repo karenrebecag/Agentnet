@@ -17,7 +17,7 @@ import (
 // the terminal from selecting text such as a code or a URL.
 func (e env) watch() (int, error) {
 	guestsPath, _, _ := e.paths()
-	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath), tui.Local{Home: e.store.Home, GuestsPath: guestsPath}, e.watchInfo()), tea.WithAltScreen())
+	program := tea.NewProgram(tui.New(tui.NewFeed(e.store, guestsPath), tui.Local{Home: e.store.Home, GuestsPath: guestsPath, Store: e.store}, e.watchInfo()), tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		return ExitError, err
 	}

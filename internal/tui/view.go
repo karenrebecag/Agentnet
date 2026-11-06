@@ -15,7 +15,7 @@ const minWidth = 40
 type hotkey struct{ key, label string }
 
 var tabKeys = [tabCount][]hotkey{
-	{{"↵", "Join"}, {"e", "Join open to guests"}},
+	{{"↵", "Join"}, {"e", "Open to web guests"}},
 	{{"a", "Add"}, {"r", "Rotate"}, {"x", "Revoke"}},
 	{{"n", "Add web AI"}, {"a", "Approve"}, {"x", "Revoke/Deny"}},
 	{{"↵", "Read"}},

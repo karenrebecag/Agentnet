@@ -98,6 +98,8 @@ A guest can reach an agent only if both are true:
 1. The agent's address is in the guest's `targets`, set when the guest is created.
 2. The agent's machine announced it with `accept_external: true`.
 
+On your own machine you do not set the second by hand: choosing an agent in `watch` `/add` (or pressing `e` on its row) opens that agent's current session to guests. The opening is stored in the session's registration, so it ends when the session does, and the next process to join under the same name starts closed. Targets name an agent, not a session; this keeps a later session from inheriting access nobody gave it.
+
 ## Admin: `/v1/admin/*`
 
 Authenticated with `ADMIN_TOKEN`.
