@@ -3,54 +3,39 @@
 package tui
 
 import (
+	"context"
 	"fmt"
-	"strings"
+	"strconv"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/karenrebecag/agentnet/internal/core"
+	"github.com/karenrebecag/agentnet/internal/relay"
 )
+
+const pollEvery = 500 * time.Millisecond
+
+// Info is what the screen shows about this machine. It is read once at start.
+type Info struct {
+	Version string
+	Home    string
+	Relay   string // relay host, "" when no relay is configured
+	Node    string // this machine's node name on the relay
+}
+
+type inputMode int
 
 const (
-	pollEvery   = 500 * time.Millisecond
-	agentRowsUI = 6
+	inputOff inputMode = iota
+	inputFilter
+	inputCommand
 )
 
-var (
-	title    = lipgloss.NewStyle().Bold(true)
-	dim      = lipgloss.NewStyle().Faint(true)
-	external = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	alert    = lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)
-	panel    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-)
-
-type keyMap struct {
-	Up, Down, Top, Bottom, Follow, Clear, Help, Quit key.Binding
-}
-
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Follow, k.Help, k.Quit}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{{k.Up, k.Down, k.Top, k.Bottom}, {k.Follow, k.Clear, k.Help, k.Quit}}
-}
-
-var keys = keyMap{
-	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "scroll up")),
-	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "scroll down")),
-	Top:    key.NewBinding(key.WithKeys("home", "g"), key.WithHelp("g", "oldest")),
-	Bottom: key.NewBinding(key.WithKeys("end", "G"), key.WithHelp("G", "newest")),
-	Follow: key.NewBinding(key.WithKeys("f", " "), key.WithHelp("f", "follow on/off")),
-	Clear:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "clear")),
-	Help:   key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "more keys")),
-	Quit:   key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
+// confirmation is a destructive action waiting for y.
+type confirmation struct {
+	prompt string
+	cmd    tea.Cmd
 }
 
 type tickMsg time.Time
@@ -61,41 +46,39 @@ type pollMsg struct {
 }
 
 type Model struct {
-	feed   *Feed
+	feed *Feed
+	act  Actions
+	info Info
+
 	snap   Snapshot
 	events []core.Envelope
-	agents table.Model
-	log    viewport.Model
-	help   help.Model
-	follow bool
-	err    error
-	width  int
-	height int
-	ready  bool
+	nodes  []relay.Node
+	guests []GuestRow
+	// relayErr explains an empty Nodes tab, for example a missing relay.
+	relayErr error
+	loaded   bool
+
+	tab    tabID
+	cursor [tabCount]int
+	filter [tabCount]string
+
+	input   lineInput
+	mode    inputMode
+	pick    int
+	confirm *confirmation
+	secret  *secretNote
+	detail  *core.Envelope
+
+	status    string
+	statusErr bool
+	busy      bool
+	now       time.Time
+	width     int
+	height    int
 }
 
-func New(feed *Feed) Model {
-	agents := table.New(
-		table.WithColumns(agentColumns(60)),
-		table.WithHeight(agentRowsUI),
-		table.WithFocused(false),
-	)
-	styles := table.DefaultStyles()
-	styles.Header = styles.Header.Bold(true).BorderStyle(lipgloss.NormalBorder()).BorderBottom(true)
-	styles.Selected = lipgloss.NewStyle()
-	agents.SetStyles(styles)
-	return Model{feed: feed, agents: agents, help: help.New(), follow: true}
-}
-
-func agentColumns(width int) []table.Column {
-	name := max(14, width-44)
-	return []table.Column{
-		{Title: "", Width: 1},
-		{Title: "agent", Width: name},
-		{Title: "kind", Width: 8},
-		{Title: "unread", Width: 7},
-		{Title: "guests", Width: 7},
-	}
+func New(feed *Feed, act Actions, info Info) Model {
+	return Model{feed: feed, act: act, info: info, now: time.Now()}
 }
 
 func (m Model) poll() tea.Cmd {
@@ -114,173 +97,138 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, keys.Quit):
-			return m, tea.Quit
-		case key.Matches(msg, keys.Follow):
-			m.follow = !m.follow
-			if m.follow {
-				m.log.GotoBottom()
-			}
-			return m, nil
-		case key.Matches(msg, keys.Clear):
-			m.events = nil
-			m.refreshLog()
-			return m, nil
-		case key.Matches(msg, keys.Help):
-			m.help.ShowAll = !m.help.ShowAll
-			m.layout()
-			return m, nil
-		case key.Matches(msg, keys.Top):
-			m.follow = false
-			m.log.GotoTop()
-			return m, nil
-		case key.Matches(msg, keys.Bottom):
-			m.follow = true
-			m.log.GotoBottom()
-			return m, nil
-		case key.Matches(msg, keys.Up):
-			m.follow = false
-		}
-		m.log, cmd = m.log.Update(msg)
-		if m.log.AtBottom() {
-			m.follow = true
-		}
-		return m, cmd
-	case tea.MouseMsg:
-		m.log, cmd = m.log.Update(msg)
-		m.follow = m.log.AtBottom()
-		return m, cmd
+		return m.onKey(msg)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.layout()
 	case tickMsg:
+		m.now = time.Time(msg)
 		return m, tea.Batch(m.poll(), tick())
 	case pollMsg:
-		m.err = msg.err
-		m.snap.Agents, m.snap.Pending = msg.snap.Agents, msg.snap.Pending
-		m.agents.SetRows(agentRows(m.snap.Agents))
-		if len(msg.snap.New) > 0 {
-			m.events = append(m.events, msg.snap.New...)
-			if len(m.events) > MaxEvents {
-				m.events = m.events[len(m.events)-MaxEvents:]
-			}
-			m.refreshLog()
+		m.onPoll(msg)
+	case remoteMsg:
+		m.nodes, m.guests, m.relayErr, m.loaded, m.busy = msg.nodes, msg.guests, msg.relayErr, true, false
+		m.clampCursors()
+	case actionMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.setStatus(msg.err.Error(), true)
+			return m, nil
 		}
+		m.setStatus(msg.done, false)
+		m.secret = msg.secret
+		return m, m.reload()
 	}
 	return m, nil
 }
 
-func agentRows(agents []AgentRow) []table.Row {
-	rows := make([]table.Row, 0, len(agents))
-	for _, a := range agents {
-		dot := "○"
-		if a.Live {
-			dot = "●"
-		}
-		unread := ""
-		if a.Unread > 0 {
-			unread = fmt.Sprint(a.Unread)
-		}
-		ext := ""
-		if a.External {
-			ext = "open"
-		}
-		rows = append(rows, table.Row{dot, a.Name, a.Kind, unread, ext})
+func (m *Model) onPoll(msg pollMsg) {
+	if msg.err != nil {
+		m.setStatus(msg.err.Error(), true)
 	}
-	return rows
-}
-
-func (m *Model) layout() {
-	width := max(m.width, 60)
-	m.agents.SetColumns(agentColumns(width - 4))
-	m.agents.SetWidth(width - 4)
-	m.help.Width = width
-	fixed := lipgloss.Height(m.header()) + agentRowsUI + 4 + 2 + lipgloss.Height(m.footer())
-	height := max(3, m.height-fixed)
-	if !m.ready {
-		m.log = viewport.New(width-4, height)
-		m.ready = true
-	} else {
-		m.log.Width, m.log.Height = width-4, height
-	}
-	m.refreshLog()
-}
-
-func (m *Model) refreshLog() {
-	if !m.ready {
+	m.snap.Agents, m.snap.Pending = msg.snap.Agents, msg.snap.Pending
+	if len(msg.snap.New) == 0 {
+		m.clampCursors()
 		return
 	}
-	m.log.SetContent(m.renderEvents(m.log.Width))
-	if m.follow {
-		m.log.GotoBottom()
+	// The Messages cursor follows new messages only while it sits on the newest.
+	following := m.cursor[tabMessages] >= len(m.events)-1
+	m.events = append(m.events, msg.snap.New...)
+	if len(m.events) > MaxEvents {
+		m.events = m.events[len(m.events)-MaxEvents:]
+	}
+	if following {
+		m.cursor[tabMessages] = len(m.events) - 1
+	}
+	m.clampCursors()
+}
+
+func (m *Model) reload() tea.Cmd {
+	m.busy = true
+	return refresh(m.act)
+}
+
+func (m *Model) setStatus(s string, isErr bool) {
+	m.status, m.statusErr = s, isErr
+}
+
+func (m *Model) clampCursors() {
+	for t := tabID(0); t < tabCount; t++ {
+		n := len(m.table(t).rows)
+		m.cursor[t] = max(0, min(m.cursor[t], n-1))
 	}
 }
 
-func (m Model) renderEvents(width int) string {
-	if len(m.events) == 0 {
-		return dim.Render("no messages yet")
+// selectedKey is the key of the row under the cursor, or "" on an empty table.
+func (m Model) selectedKey() string {
+	t := m.table(m.tab)
+	if m.cursor[m.tab] < len(t.keys) {
+		return t.keys[m.cursor[m.tab]]
 	}
-	lines := make([]string, 0, len(m.events))
-	for _, e := range m.events {
-		ts := e.TS
-		if t, err := time.Parse(time.RFC3339, e.TS); err == nil {
-			ts = t.Local().Format("15:04:05")
+	return ""
+}
+
+func (m Model) selectedGuest() (GuestRow, bool) {
+	key := m.selectedKey()
+	for _, g := range m.guests {
+		if string(g.Via)+"/"+g.Name == key {
+			return g, true
 		}
-		head := fmt.Sprintf("%s %s → %s ", dim.Render(ts), e.From, e.To)
-		tag := ""
-		if e.Origin == core.OriginExternal {
-			tag = external.Render("[ext] ")
-		}
-		used := lipgloss.Width(head) + lipgloss.Width(tag)
-		lines = append(lines, head+tag+oneLine(e.Text, width-used))
 	}
-	return strings.Join(lines, "\n")
+	return GuestRow{}, false
 }
 
-func oneLine(s string, width int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if width > 1 && len([]rune(s)) > width {
-		return string([]rune(s)[:width-1]) + "…"
+func (m Model) selectedMessage() (core.Envelope, bool) {
+	i, err := strconv.Atoi(m.selectedKey())
+	if err != nil || i < 0 || i >= len(m.events) {
+		return core.Envelope{}, false
 	}
-	return s
+	return m.events[i], true
 }
 
-func (m Model) header() string {
-	live := 0
-	for _, a := range m.snap.Agents {
-		if a.Live {
-			live++
+func (m Model) nodeAction(verb string, local bool, name string) *confirmation {
+	prompt := fmt.Sprintf("%s node %s?", verb, name)
+	if local {
+		prompt += " This is this machine: its link drops"
+		if verb == "Rotate" {
+			prompt += " and relay.json gets the new token; restart agentnet link."
+		} else {
+			prompt += " and relay.json loses its token."
 		}
 	}
-	line := title.Render("agentnet watch") + dim.Render(fmt.Sprintf("  %d agents, %d live", len(m.snap.Agents), live))
-	if len(m.snap.Pending) > 0 {
-		line += "  " + alert.Render("pending guests: "+strings.Join(m.snap.Pending, ", ")+" (agentnet guests approve <name>)")
+	act := m.act
+	var cmd tea.Cmd
+	if verb == "Rotate" {
+		cmd = run("rotated "+name, func(ctx context.Context) (*secretNote, error) {
+			token, err := act.RotateNode(ctx, name)
+			return &secretNote{title: "New token for " + name, token: token, hint: "The old token stopped working."}, err
+		})
+	} else {
+		cmd = run("revoked "+name, func(ctx context.Context) (*secretNote, error) {
+			return nil, act.RevokeNode(ctx, name)
+		})
 	}
-	return line
+	return &confirmation{prompt: prompt + " [y/N]", cmd: cmd}
 }
 
-func (m Model) footer() string {
-	state := dim.Render("following")
-	if !m.follow {
-		state = dim.Render("paused, scrolled back")
+func (m Model) guestAction(verb string, g GuestRow) *confirmation {
+	prompt := fmt.Sprintf("%s %s guest %s? [y/N]", verb, g.Via, g.Name)
+	act := m.act
+	var cmd tea.Cmd
+	switch {
+	case verb == "Approve":
+		cmd = run("approved "+g.Name, func(context.Context) (*secretNote, error) {
+			return nil, act.ApproveExposeGuest(g.Name)
+		})
+	case g.Via == ViaRelay:
+		cmd = run("revoked relay guest "+g.Name, func(ctx context.Context) (*secretNote, error) {
+			return nil, act.RevokeNode(ctx, g.Name)
+		})
+	default:
+		cmd = run("revoked expose guest "+g.Name, func(context.Context) (*secretNote, error) {
+			return nil, act.RevokeExposeGuest(g.Name)
+		})
 	}
-	out := state + "  " + m.help.View(keys)
-	if m.err != nil {
-		out = alert.Render(m.err.Error()) + "  " + out
-	}
-	return out
-}
-
-func (m Model) View() string {
-	if !m.ready {
-		return "loading…"
-	}
-	width := max(m.width, 60)
-	agents := panel.Width(width - 2).Render(m.agents.View())
-	activity := panel.Width(width - 2).Render(title.Render("activity") + "\n" + m.log.View())
-	return lipgloss.JoinVertical(lipgloss.Left, m.header(), agents, activity, m.footer())
+	return &confirmation{prompt: prompt, cmd: cmd}
 }
