@@ -15,8 +15,7 @@ const minWidth = 40
 type hotkey struct{ key, label string }
 
 var tabKeys = [tabCount][]hotkey{
-	{},
-	{{"↵", "Copy join line"}, {"e", "Join open to guests"}},
+	{{"↵", "Join"}, {"e", "Join open to guests"}},
 	{{"a", "Add"}, {"r", "Rotate"}, {"x", "Revoke"}},
 	{{"n", "Add web AI"}, {"a", "Approve"}, {"x", "Revoke/Deny"}},
 	{{"↵", "Read"}},
@@ -184,8 +183,6 @@ func (m Model) body(width, height int) string {
 		return m.detailView(width)
 	case (m.tab == tabNodes || m.tab == tabGuests) && !m.loaded:
 		return " " + dim.Render("loading…")
-	case m.tab == tabSessions && m.sessionsErr != nil:
-		return " " + down.Render(m.sessionsErr.Error())
 	case m.tab == tabNodes && m.relayErr != nil:
 		return " " + down.Render("relay: "+m.relayErr.Error()) + "\n " + dim.Render("set one up with agentnet relay init --url <url> and agentnet relay admin-token")
 	}

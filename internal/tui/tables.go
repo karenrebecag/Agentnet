@@ -14,14 +14,13 @@ type tabID int
 
 const (
 	tabAgents tabID = iota
-	tabSessions
 	tabNodes
 	tabGuests
 	tabMessages
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Agents", "Sessions", "Nodes", "Guests", "Messages"}
+var tabNames = [tabCount]string{"Agents", "Nodes", "Guests", "Messages"}
 
 // cell is one table value: plain text for width and filtering, a style to draw it.
 type cell struct {
@@ -42,7 +41,15 @@ func (m Model) table(tab tabID) table {
 	var t table
 	switch tab {
 	case tabAgents:
-		t.head = []string{"Name", "State", "Kind", "Unread", "External"}
+		// One list: agents in the network, then CLIs open on this machine that
+		// have not joined. An open CLI is an agent that has not said hello yet.
+		t.head = []string{"Name", "State", "Kind", "Unread", "External", "Terminal"}
+		terminal := map[string]string{}
+		for _, s := range m.sessions {
+			if s.Agent != "" {
+				terminal[s.Agent] = s.TTY
+			}
+		}
 		for _, a := range m.snap.Agents {
 			state := c("offline", down)
 			if a.Live {
@@ -56,20 +63,12 @@ func (m Model) table(tab tabID) table {
 			if a.External {
 				ext = c("yes", warn)
 			}
-			t.add(a.Name, c(a.Name, name), state, c(a.Kind, text), unread, ext)
+			t.add("agent/"+a.Name, c(a.Name, name), state, c(a.Kind, text), unread, ext, c(terminal[a.Name], dim))
 		}
-	case tabSessions:
-		t.head = []string{"Session", "Tool", "State", "Network", "Terminal"}
 		for _, s := range m.sessions {
-			network := c("not joined", dim)
-			if s.Agent != "" {
-				network = c("as "+s.Agent, up)
+			if s.Agent == "" {
+				t.add(fmt.Sprintf("session/%d", s.PID), c(s.Name, text), c("not joined", warn), c(s.Tool, text), c("", dim), c("", dim), c(s.TTY, dim))
 			}
-			state := c(s.State, text)
-			if s.State == "busy" {
-				state = c("busy", warn)
-			}
-			t.add(fmt.Sprint(s.PID), c(s.Name, name), c(s.Tool, text), state, network, c(s.TTY, dim))
 		}
 	case tabNodes:
 		t.head = []string{"Name", "State", "Last seen", "Agents"}

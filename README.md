@@ -80,7 +80,7 @@ AGENTNET {"id":"3f2a...","ts":"2026-01-01T12:00:00Z","from":"bob","to":"alice","
 | `agentnet read [name]` | Print unread messages once and mark them read |
 | `agentnet list` | Show registered agents: name, kind, live or offline, working directory |
 | `agentnet leave [name]` | Remove a registration left behind by a crashed process |
-| `agentnet watch` | Network manager: tabs for agents, open CLI sessions, relay nodes, guests and messages. Enter on a session copies its join line; `/add` connects a web AI; add, rotate, revoke and approve from the selected row or with `/` commands, with completion |
+| `agentnet watch` | Network manager: tabs for agents (joined, offline, and CLIs open here that have not joined), relay nodes, guests and messages. Enter on an unjoined CLI copies its join line; `/add` connects a web AI; add, rotate, revoke and approve from the selected row or with `/` commands, with completion |
 | `agentnet init [--install-claude-skill] [--force]` | Create the data directory and print a `join` command for each known agent CLI on `PATH` |
 | `agentnet guests add\|list\|approve\|revoke` | Create, list, approve or revoke a remote guest. Approve is local only |
 | `agentnet expose [--ttl 2h]` / `expose stop` | Open a quick tunnel, or stop one |

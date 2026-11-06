@@ -74,7 +74,7 @@ func (m *Model) onSignins(msg signinsMsg) {
 func (m Model) selectedSession() (sessions.Session, bool) {
 	key := m.selectedKey()
 	for _, s := range m.sessions {
-		if fmt.Sprint(s.PID) == key {
+		if fmt.Sprintf("session/%d", s.PID) == key {
 			return s, true
 		}
 	}
@@ -96,6 +96,9 @@ func (m Model) selectedSignin() (relay.Signin, bool) {
 func (m Model) copyJoin(external bool) (tea.Model, tea.Cmd) {
 	s, ok := m.selectedSession()
 	if !ok {
+		if strings.HasPrefix(m.selectedKey(), "agent/") {
+			m.setStatus("already in the network; Enter joins a row marked not joined", false)
+		}
 		return m, nil
 	}
 	if s.Agent != "" && !external {
@@ -229,5 +232,5 @@ func (m Model) wizardSuggestions() []suggestion {
 	}
 	word := m.input.Value()
 	return append(filterList(open, word, "agent on the relay"),
-		filterList(closed, word, "does not take guests yet: rejoin it from Sessions with e")...)
+		filterList(closed, word, "does not take guests yet: rejoin it from Agents with e")...)
 }
