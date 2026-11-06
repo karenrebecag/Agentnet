@@ -21,11 +21,7 @@ func (m Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter", "esc":
 			m.secret = nil
 		case "c":
-			m.copyText(m.secret.token, "code")
-		case "u":
-			if m.secret.url != "" {
-				m.copyText(m.secret.url, "URL")
-			}
+			m.copyText(m.secret.token, "text")
 		}
 		return m, nil
 	case m.confirm != nil:
@@ -191,15 +187,6 @@ func (m Model) onRowAction(key string) (tea.Model, tea.Cmd) {
 				m.confirm = m.contactAction(true, ct)
 			case "x":
 				m.confirm = m.contactAction(false, ct)
-			}
-			return m, nil
-		}
-		if s, ok := m.selectedSignin(); ok {
-			switch key {
-			case "a":
-				m.confirm = m.signinAction(true, s)
-			case "x":
-				m.confirm = m.signinAction(false, s)
 			}
 			return m, nil
 		}

@@ -76,20 +76,6 @@ func (f *fakeActions) DecideContact(_ context.Context, id string, approve bool) 
 	f.calls = append(f.calls, fmt.Sprintf("contact %s %t", id, approve))
 	return nil
 }
-func (f *fakeActions) PairGuest(_ context.Context, n string) (relay.Pairing, error) {
-	f.calls = append(f.calls, "pair "+n)
-	return relay.Pairing{Code: "ABCD-EFGH"}, nil
-}
-func (f *fakeActions) Signins(context.Context) ([]relay.Signin, error) {
-	if !f.waiting {
-		return nil, nil
-	}
-	return []relay.Signin{{ID: "0a1b2c3d", Guest: "claude-web", Host: "claude.ai", ClientName: "Claude"}}, nil
-}
-func (f *fakeActions) DecideSignin(_ context.Context, id string, approve bool) error {
-	f.calls = append(f.calls, fmt.Sprintf("signin %s %t", id, approve))
-	return nil
-}
 func (f *fakeActions) Sessions(context.Context, map[int]string) ([]sessions.Session, error) {
 	return []sessions.Session{{PID: 101, Tool: "grok", Name: "grok-011", TTY: "ttys011", State: "open"}}, nil
 }
@@ -247,31 +233,6 @@ func TestAFirstContactAsksBeforeAnythingIsDelivered(t *testing.T) {
 	}
 }
 
-func TestSigninWaitsForConfirmation(t *testing.T) {
-	act := &fakeActions{waiting: true}
-	m := settle(newTestModel(act), scanSignins(act))
-	if len(act.calls) != 0 || m.confirm == nil || !strings.Contains(m.confirm.prompt, "claude.ai") || !strings.Contains(m.confirm.prompt, "0a1b2c3d") {
-		t.Fatalf("approval must name the host and wait for y: %v %+v", act.calls, m.confirm)
-	}
-	drive(t, m, "y")
-	if strings.Join(act.calls, ";") != "signin 0a1b2c3d true" {
-		t.Fatalf("calls = %v", act.calls)
-	}
-}
-
-func TestANewSigninAsksForApprovalAtOnce(t *testing.T) {
-	act := &fakeActions{waiting: true}
-	m := newTestModel(act)
-	m.secret = &secretNote{title: "Connect a web AI as claude-web", token: "ABCD-EFGH"}
-	m = settle(m, scanSignins(act))
-	if m.secret != nil || m.confirm == nil || m.tab != tabGuests || !strings.Contains(m.confirm.prompt, "claude.ai") {
-		t.Fatalf("a used code's screen must give way to the approval: secret=%v confirm=%v tab=%v", m.secret, m.confirm, m.tab)
-	}
-	if len(act.calls) != 0 {
-		t.Fatalf("approval needs y: %v", act.calls)
-	}
-}
-
 func TestEnterOnAnUnjoinedCLICopiesItsJoinLine(t *testing.T) {
 	act := &fakeActions{}
 	// Init's scan is what fills the list when watch opens.
@@ -303,18 +264,18 @@ func TestAddWithAnExistingNameAsksBeforeReplacingItsLink(t *testing.T) {
 
 func TestAKnownCommandWithoutItsArgumentSaysHowToCallIt(t *testing.T) {
 	m := drive(t, newTestModel(&fakeActions{}), "/")
-	m = drive(t, m, append(splitKeys("pair"), "enter")...)
-	if m.status != "usage: /pair <guest>" {
+	m = drive(t, m, append(splitKeys("rotate"), "enter")...)
+	if m.status != "usage: /rotate <node>" {
 		t.Fatalf("status = %q", m.status)
 	}
 }
 
-func TestTheCodeScreenCopiesCodeAndURL(t *testing.T) {
+func TestTheLinkScreenCopiesTheLink(t *testing.T) {
 	act := &fakeActions{}
 	m := newTestModel(act)
-	m.secret = pairingNote("perplexityweb", relay.Pairing{Code: "SYWC-T2F2", ConnectorURL: "https://relay.example/mcp"})
-	drive(t, m, "c", "u")
-	if strings.Join(act.calls, ";") != "copy SYWC-T2F2;copy https://relay.example/mcp" {
+	m.secret = linkNote("perplexityweb", "https://relay.example/mcp?key=an_x")
+	drive(t, m, "c")
+	if strings.Join(act.calls, ";") != "copy https://relay.example/mcp?key=an_x" {
 		t.Fatalf("calls = %v", act.calls)
 	}
 }

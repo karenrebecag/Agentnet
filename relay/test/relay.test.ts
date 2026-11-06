@@ -220,6 +220,17 @@ describe("guests", () => {
   });
 });
 
+describe("no sign-in", () => {
+  it("offers no OAuth discovery, so clients use the link as it is", async () => {
+    for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server", "/oauth/register"]) {
+      expect((await SELF.fetch(`${BASE}${path}`)).status).toBe(404);
+    }
+    const res = await SELF.fetch(`${BASE}/mcp`, { method: "POST", body: "{}" });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("WWW-Authenticate")).toBe("Bearer");
+  });
+});
+
 describe("malformed input", () => {
   it("answers null bodies and frames with errors instead of crashing", async () => {
     expect((await adminCall("/v1/admin/nodes", null)).status).toBe(400);

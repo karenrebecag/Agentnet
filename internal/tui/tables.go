@@ -89,9 +89,6 @@ func (m Model) table(tab tabID) table {
 		}
 	case tabGuests:
 		t.head = []string{"Name", "Via", "State", "Can ask"}
-		for _, s := range m.signins {
-			t.add("signin/"+s.ID, c(s.Guest, name), c("sign-in", text), c("waiting "+s.ID, warn), c("from "+s.Host+" · says it is "+s.ClientName, warn))
-		}
 		for _, ct := range m.contacts {
 			t.add("contact/"+ct.ID, c(ct.Guest, name), c("contact", text), c("waiting "+ct.ID, warn), c("wants "+ct.Address, warn))
 		}

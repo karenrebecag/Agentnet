@@ -67,37 +67,6 @@ func TestSendToOfflineLocalStillSaysOffline(t *testing.T) {
 	}
 }
 
-func TestPairPrintsCodeOnce(t *testing.T) {
-	const code = "K7NP-4QDM"
-	var gotFor string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			For string `json:"for"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		gotFor = body.For
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{
-			"code": code, "expires": "2026-11-06T18:10:00Z", "connector_url": "https://relay.example.test/mcp",
-		})
-	}))
-	t.Cleanup(srv.Close)
-	home := t.TempDir()
-	t.Setenv("AGENTNET_HOME", home)
-	writeRelayAdmin(t, home, srv.URL)
-	var stdout, stderr bytes.Buffer
-	codeExit := Run([]string{"relay", "node", "pair", "web", "--for", "Claude.AI."}, strings.NewReader(""), &stdout, &stderr)
-	if codeExit != ExitOK {
-		t.Fatalf("code %d %s", codeExit, stderr.String())
-	}
-	if gotFor != "claude.ai" || strings.Count(stdout.String(), code) != 1 || strings.Contains(stderr.String(), code) {
-		t.Fatalf("for %q stdout %q stderr %q", gotFor, stdout.String(), stderr.String())
-	}
-	if dirHasCLI(t, home, code) {
-		t.Fatal("code on disk")
-	}
-}
-
 func TestNodeAddInboxFlag(t *testing.T) {
 	var posts int
 	var bodies []map[string]any
@@ -131,23 +100,6 @@ func TestNodeAddInboxFlag(t *testing.T) {
 	}
 	if _, ok := bodies[1]["inbox"]; ok {
 		t.Fatalf("inbox key present %+v", bodies[1])
-	}
-}
-
-func TestPairBadHostDoesNotPost(t *testing.T) {
-	posts := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		posts++
-		http.Error(w, "no", http.StatusBadRequest)
-	}))
-	t.Cleanup(srv.Close)
-	home := t.TempDir()
-	t.Setenv("AGENTNET_HOME", home)
-	writeRelayAdmin(t, home, srv.URL)
-	var stderr bytes.Buffer
-	code := Run([]string{"relay", "node", "pair", "web", "--for", "https://claude.ai"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
-	if code == 0 || posts != 0 || strings.Contains(stderr.String(), "K7NP") {
-		t.Fatalf("code %d posts %d %s", code, posts, stderr.String())
 	}
 }
 
