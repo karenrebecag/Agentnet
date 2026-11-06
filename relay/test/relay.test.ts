@@ -237,3 +237,85 @@ describe("malformed input", () => {
     expect((await link.next("error")).code).toBe("frame");
   });
 });
+
+describe("open guests", () => {
+  async function machineWith(agent: string, session: string) {
+    const m = unique("m");
+    const link = await connect(await addNode(m, "machine"));
+    await link.next("welcome");
+    link.send({ type: "hello", agents: [{ name: agent, kind: "claude", accept_external: false, session }] });
+    await new Promise((r) => setTimeout(r, 200));
+    return { m, link };
+  }
+
+  async function waitingContact(guest: string) {
+    const list = (await (await adminCall("/v1/admin/contacts")).json()) as { id: string; guest: string; address: string }[];
+    return list.find((c) => c.guest === guest)!;
+  }
+
+  it("reach any online agent once the person allows that agent session", async () => {
+    const { m, link } = await machineWith("orq", "s1");
+    const g = unique("g");
+    const gTok = await addNode(g, "guest");
+
+    const listed = (await tool(gTok, "list_agents", {})).structuredContent.agents.find((a: any) => a.name === `${m}.orq`);
+    expect(listed).toMatchObject({ live: true, allowed: false });
+
+    const first = await tool(gTok, "ask", { to: `${m}.orq`, text: "hola", wait_seconds: 0 });
+    expect(first.structuredContent.status).toBe("awaiting_approval");
+    const c = await waitingContact(g);
+    expect(c.address).toBe(`${m}.orq`);
+    expect((await adminCall(`/v1/admin/contacts/${c.id}/approve`, {})).status).toBe(200);
+
+    // The held message arrives only now, and the answer reaches the guest.
+    const delivered = await link.next("deliver");
+    expect(delivered.envelope.text).toBe("hola");
+    link.send({ type: "send", ref: "r", from: "orq", to: delivered.envelope.from, text: "hey", reply_to: delivered.envelope.id });
+    const answer = await tool(gTok, "get_reply", { id: first.structuredContent.id, wait_seconds: 5 });
+    expect(answer.structuredContent).toMatchObject({ status: "answered", reply: "hey" });
+
+    // A new session under the same name has to be allowed again.
+    link.send({ type: "agents", agents: [{ name: "orq", kind: "claude", accept_external: false, session: "s2" }] });
+    await new Promise((r) => setTimeout(r, 200));
+    expect((await tool(gTok, "ask", { to: `${m}.orq`, text: "again", wait_seconds: 0 })).structuredContent.status).toBe("awaiting_approval");
+  });
+
+  it("tell the guest when the person says no, and never deliver the held message", async () => {
+    const { m, link } = await machineWith("orq", "s1");
+    const g = unique("g");
+    const gTok = await addNode(g, "guest");
+    const asked = await tool(gTok, "ask", { to: `${m}.orq`, text: "secret plan", wait_seconds: 0 });
+    await adminCall(`/v1/admin/contacts/${(await waitingContact(g)).id}/deny`, {});
+    const answer = await tool(gTok, "get_reply", { id: asked.structuredContent.id, wait_seconds: 2 });
+    expect(answer.structuredContent.reply).toContain("did not allow");
+    const stray = await Promise.race([link.next("deliver"), new Promise((r) => setTimeout(() => r(null), 500))]);
+    expect(stray).toBeNull();
+    // A refusal holds for a while, so a leaked link cannot keep asking.
+    expect((await tool(gTok, "ask", { to: `${m}.orq`, text: "again", wait_seconds: 0 })).isError).toBe(true);
+  });
+
+  it("deliver nothing when the agent restarted while the request waited", async () => {
+    const { m, link } = await machineWith("orq", "s1");
+    const g = unique("g");
+    const gTok = await addNode(g, "guest");
+    const asked = await tool(gTok, "ask", { to: `${m}.orq`, text: "for s1 only", wait_seconds: 0 });
+    link.send({ type: "agents", agents: [{ name: "orq", kind: "claude", accept_external: false, session: "s2" }] });
+    await new Promise((r) => setTimeout(r, 200));
+    await adminCall(`/v1/admin/contacts/${(await waitingContact(g)).id}/approve`, {});
+    const stray = await Promise.race([link.next("deliver"), new Promise((r) => setTimeout(() => r(null), 500))]);
+    expect(stray).toBeNull();
+    const answer = await tool(gTok, "get_reply", { id: asked.structuredContent.id, wait_seconds: 2 });
+    expect(answer.structuredContent.reply).toContain("restarted");
+  });
+
+  it("accept the guest token as ?key= in the connector URL", async () => {
+    const gTok = await addNode(unique("g"), "guest");
+    const res = await SELF.fetch(`${BASE}/mcp?key=${gTok}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await SELF.fetch(`${BASE}/mcp?key=an_wrong`, { method: "POST" })).status).toBe(401);
+  });
+});

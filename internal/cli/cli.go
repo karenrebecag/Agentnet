@@ -49,6 +49,7 @@ const (
   relay admin-token                 write an admin token and print it once
   relay node add|list|pair|rotate|revoke manage relay nodes
   relay signins [approve|deny <id>] web clients waiting for your yes
+  relay contacts [approve|deny <id>] web AIs waiting to talk to an agent
 
 AGENTNET_NAME sets the default name, AGENTNET_HOME the data directory.
 Exit codes: 0 ok, 1 error, 2 recipient offline (queued), 3 name already live.

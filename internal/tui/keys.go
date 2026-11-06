@@ -115,7 +115,7 @@ func (m Model) suggestions() []suggestion {
 		return nil
 	}
 	if m.wizard != nil {
-		return m.wizardSuggestions()
+		return nil
 	}
 	return m.completions().suggest(m.input.Value())
 }
@@ -184,6 +184,15 @@ func (m Model) onRowAction(key string) (tea.Model, tea.Cmd) {
 	case tabGuests:
 		if key == "n" {
 			return m.startWizard()
+		}
+		if ct, ok := m.selectedContact(); ok {
+			switch key {
+			case "a":
+				m.confirm = m.contactAction(true, ct)
+			case "x":
+				m.confirm = m.contactAction(false, ct)
+			}
+			return m, nil
 		}
 		if s, ok := m.selectedSignin(); ok {
 			switch key {

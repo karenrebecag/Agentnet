@@ -9,7 +9,7 @@ import {
   register,
   token,
 } from "./oauth";
-import { ACCESS_RE, type Env, type NodeKind, type NodeRecord, TOKEN_RE, bearer, json, sha256Hex, timingSafeEqual } from "./shared";
+import { ACCESS_RE, type Env, type Envelope, type NodeKind, type NodeRecord, TOKEN_RE, bearer, json, randomHex, sha256Hex, splitAddress, timingSafeEqual } from "./shared";
 
 export { Directory } from "./directory";
 export { Mailbox } from "./mailbox";
@@ -17,8 +17,7 @@ export { Mailbox } from "./mailbox";
 const MAX_ADMIN_BODY = 8 * 1024;
 const HOST_RE = /^(localhost|(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})$/;
 
-async function authenticate(request: Request, env: Env, kind: NodeKind): Promise<NodeRecord | null> {
-  const secret = bearer(request);
+async function authenticate(request: Request, env: Env, kind: NodeKind, secret = bearer(request)): Promise<NodeRecord | null> {
   const directory = env.DIRECTORY.getByName("directory");
   // Malformed tokens never reach the single Directory object, so junk floods
   // cost it nothing. OAuth access tokens only ever stand for guests.
@@ -63,6 +62,24 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     return "error" in result ? json(result, 400) : json({ name: body.name, token: result.token }, 201);
   }
   if (path === "/v1/admin/signins" && request.method === "GET") return json(await directory.listSignins());
+  if (path === "/v1/admin/contacts" && request.method === "GET") return json(await directory.listContacts());
+  const contact = /^\/v1\/admin\/contacts\/([0-9a-f]{8})\/(approve|deny)$/.exec(path);
+  if (contact && request.method === "POST") {
+    const approve = contact[2] === "approve";
+    const held = await directory.decideContact(contact[1], approve);
+    if (!held) return json({ error: "no contact is waiting with that id" }, 404);
+    const envelope = JSON.parse(held.envelope) as Envelope;
+    const dest = splitAddress(held.address)!;
+    if (held.deliver) {
+      const sent = await env.MAILBOX.getByName(dest.node).enqueue(envelope);
+      if (sent.status !== "rejected") return json({ delivered: true });
+      await answerGuest(env, envelope, held.address, `[agentnet] Allowed, but the message could not be delivered: ${sent.error}.`);
+      return json({ delivered: false, error: sent.error });
+    }
+    const why = approve ? "The agent restarted while this waited; ask again." : "The person did not allow this contact.";
+    await answerGuest(env, envelope, held.address, `[agentnet] ${why}`);
+    return json({ delivered: false });
+  }
   const signin = /^\/v1\/admin\/signins\/([0-9a-f]{8})\/(approve|deny)$/.exec(path);
   if (signin && request.method === "POST") {
     if (!(await directory.decideSignin(signin[1], signin[2] === "approve"))) return json({ error: "no sign-in is waiting with that id" }, 404);
@@ -98,6 +115,15 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     return json({});
   }
   return json({ error: "not found" }, 404);
+}
+
+// The guest waits on get_reply for its held message, so it hears the outcome
+// as that reply instead of waiting forever.
+async function answerGuest(env: Env, envelope: Envelope, from: string, text: string): Promise<void> {
+  const guestNode = envelope.from.slice(0, envelope.from.indexOf("."));
+  await env.MAILBOX.getByName(guestNode).enqueueReply({
+    id: randomHex(16), ts: new Date().toISOString(), from, to: envelope.from, text, origin: "relay", reply_to: envelope.id,
+  });
 }
 
 // A rotated or revoked token must not keep a socket that was opened with it.
@@ -145,7 +171,9 @@ export default {
     }
 
     if (path === "/mcp") {
-      const guest = await authenticate(request, env, "guest");
+      // A connector URL may carry the guest token as ?key=, for clients that
+      // take a URL and nothing else. The header wins when both are present.
+      const guest = await authenticate(request, env, "guest", bearer(request) ?? url.searchParams.get("key"));
       if (!guest) return denied(request, env, challenge(origin));
       return handleMcp(request, env, guest);
     }

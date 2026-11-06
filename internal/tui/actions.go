@@ -28,7 +28,11 @@ type Actions interface {
 	RevokeExposeGuest(name string) error
 	// AddWebGuest creates a relay guest with an inbox and an unbound pairing
 	// code: the person approves the client's host when it signs in.
-	AddWebGuest(ctx context.Context, name string, targets []string) (relay.Pairing, error)
+	AddWebGuest(ctx context.Context, name string) (string, error)
+	// NewGuestURL replaces a web guest's link; the old one stops working.
+	NewGuestURL(ctx context.Context, name string) (string, error)
+	Contacts(ctx context.Context) ([]relay.Contact, error)
+	DecideContact(ctx context.Context, id string, approve bool) error
 	PairGuest(ctx context.Context, name string) (relay.Pairing, error)
 	Signins(ctx context.Context) ([]relay.Signin, error)
 	DecideSignin(ctx context.Context, id string, approve bool) error
@@ -76,13 +80,28 @@ func (l Local) ApproveExposeGuest(name string) error { return guests.Approve(l.G
 
 func (l Local) RevokeExposeGuest(name string) error { return guests.Revoke(l.GuestsPath, name) }
 
-func (l Local) AddWebGuest(ctx context.Context, name string, targets []string) (relay.Pairing, error) {
-	// The guest token is not shown: a web client signs in with the code, and a
-	// token nobody needs is one less secret on screen.
-	if _, _, err := relay.AddNodeOpts(ctx, l.Home, name, "guest", targets, true); err != nil {
-		return relay.Pairing{}, err
+// AddWebGuest creates an open guest with an inbox and returns its link, which
+// carries the token. watch shows it once; nothing keeps a copy.
+func (l Local) AddWebGuest(ctx context.Context, name string) (string, error) {
+	token, _, err := relay.AddNodeOpts(ctx, l.Home, name, "guest", nil, true)
+	if err != nil {
+		return "", err
 	}
-	return relay.PairNode(ctx, l.Home, name, "")
+	return relay.GuestURL(l.Home, token)
+}
+
+func (l Local) NewGuestURL(ctx context.Context, name string) (string, error) {
+	token, err := relay.RotateNode(ctx, l.Home, name)
+	if err != nil {
+		return "", err
+	}
+	return relay.GuestURL(l.Home, token)
+}
+
+func (l Local) Contacts(ctx context.Context) ([]relay.Contact, error) { return relay.ListContacts(ctx, l.Home) }
+
+func (l Local) DecideContact(ctx context.Context, id string, approve bool) error {
+	return relay.DecideContact(ctx, l.Home, id, approve)
 }
 
 func (l Local) PairGuest(ctx context.Context, name string) (relay.Pairing, error) {

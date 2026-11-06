@@ -113,6 +113,22 @@ Authenticated with `ADMIN_TOKEN`.
 | `POST` | `/v1/admin/nodes/{name}/pair` | `{for?: "claude.ai"}` | `{code, expires, connector_url}`. Without `for` the code is unbound |
 | `GET` | `/v1/admin/signins` | | `[{id, guest, client, client_name, host, ip, created, expires}]`: clients waiting for approval |
 | `POST` | `/v1/admin/signins/{id}/approve` or `/deny` | | `{}` |
+| `GET` | `/v1/admin/contacts` | | `[{id, guest, address, created, expires}]`: open guests waiting to talk to an agent |
+| `POST` | `/v1/admin/contacts/{id}/approve` or `/deny` | | approve delivers the held message; deny answers the guest with a refusal |
+
+## Connecting a web AI with a link
+
+The short way, for any assistant that takes a custom connector URL:
+
+1. In `agentnet watch`, type `/add` (or press `n` on the Guests tab) and give it a name. watch shows a link once: `https://<relay>/mcp?key=<token>`.
+2. In the assistant, add a custom connector (MCP) with that link. Nothing else: no sign-in page.
+3. Ask it to list the agents. It sees every agent online on your machines. The first time it writes to one, watch asks "<guest> wants to talk to <node>.<agent>. Allow while that session lasts?", or run `agentnet relay contacts approve <id>`. The first message is held until you answer; a refusal comes back to the assistant as the reply, and it cannot ask that agent session again for 10 minutes. If the agent restarted while the request waited, nothing is delivered and the assistant is told to ask again. An agent whose machine runs an older agentnet, with no session id, cannot be reached by an open guest.
+
+A guest made this way has no `targets`: it is an open guest. Approval is per guest and per agent session. The machine's link announces a session id with each agent (process id and join time), so when that agent's process ends and a new one joins under the same name, the guest has to be allowed again, and allowing Perplexity does not open the agent to Grok web.
+
+The link is the guest's password. Anyone who has it can list your online agents and ask to talk to them, though nothing reaches an agent without your yes. Keep it out of shared chats and screenshots. `/add` with the same name makes a new link and kills the old one; `x` on the guest's row revokes it. Workers invocation logs would record the URL and so the key; `wrangler.jsonc` turns them off (`observability.logs.invocation_logs: false`). `wrangler tail` still shows live requests, URL included, to whoever runs it on your account.
+
+`/mcp` reads the token from `Authorization: Bearer` first and from `?key=` only when there is no header.
 
 ## Signing in from a web client
 

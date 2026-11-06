@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Open web guests: `/add` asks only a name and shows a connector link with the key in it (`/mcp?key=`), with no sign-in step. The assistant lists every agent online in the network; its first message to an agent waits for "allow while that session lasts?" in `watch` or `agentnet relay contacts approve <id>`. Approval is per guest and per agent session, announced by `link`.
+
 ## [0.5.3] - 2026-11-06
 
 ### Fixed

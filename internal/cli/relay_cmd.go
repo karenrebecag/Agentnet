@@ -25,6 +25,8 @@ func (e env) relay(args []string) (int, error) {
 		return e.relayNode(args[1:])
 	case "signins":
 		return e.relaySignins(args[1:])
+	case "contacts":
+		return e.relayContacts(args[1:])
 	default:
 		return ExitError, fmt.Errorf("unknown relay command %q", args[0])
 	}
@@ -177,6 +179,29 @@ func (e env) relaySignins(args []string) (int, error) {
 	}
 	done := map[string]string{"approve": "approved", "deny": "denied"}[args[0]]
 	fmt.Fprintf(e.stdout, "%s %s: %s as %s\n", done, args[1], host, guest)
+	return ExitOK, nil
+}
+
+// relayContacts lists web AIs waiting to talk to an agent, or answers one.
+func (e env) relayContacts(args []string) (int, error) {
+	ctx := context.Background()
+	if len(args) == 0 || args[0] == "list" {
+		list, err := relay.ListContacts(ctx, e.store.Home)
+		if err != nil {
+			return ExitError, err
+		}
+		for _, c := range list {
+			fmt.Fprintf(e.stdout, "%s\t%s wants %s\texpires=%s\n", c.ID, c.Guest, c.Address, c.Expires)
+		}
+		return ExitOK, nil
+	}
+	if len(args) != 2 || (args[0] != "approve" && args[0] != "deny") {
+		return ExitError, fmt.Errorf("relay contacts needs list, approve <id> or deny <id>")
+	}
+	if err := relay.DecideContact(ctx, e.store.Home, args[1], args[0] == "approve"); err != nil {
+		return ExitError, err
+	}
+	fmt.Fprintf(e.stdout, "%s %s\n", map[string]string{"approve": "allowed", "deny": "refused"}[args[0]], args[1])
 	return ExitOK, nil
 }
 

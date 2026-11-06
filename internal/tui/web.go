@@ -176,11 +176,11 @@ func printable(s string) string {
 
 // wizard asks for a new web guest one question at a time.
 type wizard struct {
-	step int // 0 name, 1 targets
+	step int
 	name string
 }
 
-var wizardQuestions = [...]string{"name for the web guest: ", "agents it can talk to: "}
+var wizardQuestions = [...]string{"name for the web AI: "}
 
 func (m Model) startWizard() (tea.Model, tea.Cmd) {
 	m.wizard = &wizard{}
@@ -194,36 +194,44 @@ func (m Model) startWizard() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// wizardEnter takes one answer; the last one creates the guest.
+// wizardEnter takes the name and creates an open guest: it may ask any agent,
+// and the person allows each agent the first time it writes.
 func (m Model) wizardEnter() (tea.Model, tea.Cmd) {
 	answer := strings.TrimSpace(m.input.Value())
 	m.input.SetValue("")
 	m.pick = 0
 	if answer == "" {
-		m.setStatus("type an answer, or esc to cancel", true)
+		m.setStatus("type a name, or esc to cancel", true)
 		return m, nil
 	}
-	if m.wizard.step == 0 {
-		return m.wizardName(answer)
-	}
-	name, targets := m.wizard.name, splitTargets(answer)
 	m.wizard, m.mode = nil, inputOff
 	m.input.Blur()
-	m.busy = true
-	act, node := m.act, m.info.Node
-	return m, run("web guest "+name+" added", func(ctx context.Context) (*secretNote, error) {
-		if err := openLocal(act, node, targets); err != nil {
-			return nil, err
+	name, existing := m.freeName(answer)
+	act := m.act
+	if existing {
+		// A new link replaces the old one, so the AI that used it must be updated.
+		m.confirm = &confirmation{
+			prompt: name + " exists. Make a new link for it? The old link stops working. [y/N]",
+			cmd: run("new link for "+name, func(ctx context.Context) (*secretNote, error) {
+				u, err := act.NewGuestURL(ctx, name)
+				return linkNote(name, u), err
+			}),
 		}
-		p, err := act.AddWebGuest(ctx, name, targets)
-		return pairingNote(name, p), err
+		return m, nil
+	}
+	if name != answer {
+		m.setStatus(fmt.Sprintf("%s was used before and names are not reused: using %s", answer, name), false)
+	}
+	m.busy = true
+	return m, run("web guest "+name+" added", func(ctx context.Context) (*secretNote, error) {
+		u, err := act.AddWebGuest(ctx, name)
+		return linkNote(name, u), err
 	})
 }
 
-// wizardName handles a name that is already taken. A live guest of that name
-// is the same AI coming back, so it gets a new code. A name the relay will not
-// hand out again (a machine, a revoked guest) moves to the next free one.
-func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
+// freeName says whether name is a live web guest already, or else gives the
+// first name the relay will hand out: it never reuses one.
+func (m Model) freeName(name string) (string, bool) {
 	used := map[string]bool{}
 	for _, n := range m.nodes {
 		used[n.Name] = true
@@ -233,17 +241,7 @@ func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
 			continue
 		}
 		if g.Name == name && g.State != "revoked" {
-			m.wizard, m.mode = nil, inputOff
-			m.input.Blur()
-			m.busy = true
-			act, node, targets := m.act, m.info.Node, g.Targets
-			return m, run(name+" already exists: new code for it", func(ctx context.Context) (*secretNote, error) {
-				if err := openLocal(act, node, targets); err != nil {
-					return nil, err
-				}
-				p, err := act.PairGuest(ctx, name)
-				return pairingNote(name, p), err
-			})
+			return name, true
 		}
 		used[g.Name] = true
 	}
@@ -251,19 +249,20 @@ func (m Model) wizardName(name string) (tea.Model, tea.Cmd) {
 	for i := 2; used[free]; i++ {
 		free = fmt.Sprintf("%s-%d", name, i)
 	}
-	if free != name {
-		m.setStatus(fmt.Sprintf("%s was used before and names are not reused: using %s", name, free), false)
-	}
-	m.wizard = &wizard{step: 1, name: free}
-	return m, nil
+	return free, false
 }
 
-func (m *Model) copyText(text, what string) {
-	if err := m.act.Copy(text); err != nil {
-		m.setStatus(err.Error(), true)
-		return
+func linkNote(guest, link string) *secretNote {
+	return &secretNote{
+		title: "Connect a web AI as " + guest,
+		token: link,
+		hint: strings.Join([]string{
+			"1. In the AI, add a custom connector (MCP) and paste this link.",
+			"2. Ask it to list the agents and talk to one.",
+			"3. The first time it writes to an agent, watch asks you to allow it.",
+			"The link is the password: keep it out of shared chats. x on its row in Guests cuts it.",
+		}, "\n"),
 	}
-	m.setStatus(what+" copied", false)
 }
 
 func pairingNote(guest string, p relay.Pairing) *secretNote {
@@ -281,44 +280,73 @@ func pairingNote(guest string, p relay.Pairing) *secretNote {
 	}
 }
 
-// wizardSuggestions completes the targets question from the relay's agents.
-func (m Model) wizardSuggestions() []suggestion {
-	if m.wizard == nil || m.wizard.step != 1 {
-		return nil
+
+func (m *Model) copyText(text, what string) {
+	if err := m.act.Copy(text); err != nil {
+		m.setStatus(err.Error(), true)
+		return
 	}
-	var here, open, closed []string
-	for _, a := range m.snap.Agents {
-		if a.Live && m.info.Node != "" {
-			here = append(here, m.info.Node+"."+a.Name)
-		}
-	}
-	for _, n := range m.nodes {
-		if n.Revoked || n.Name == m.info.Node {
-			continue
-		}
-		for _, a := range n.Agents {
-			if a.AcceptExternal {
-				open = append(open, n.Name+"."+a.Name)
-			} else {
-				closed = append(closed, n.Name+"."+a.Name)
-			}
-		}
-	}
-	word := m.input.Value()
-	out := filterList(here, word, "on this machine: open to this guest while its session lasts")
-	out = append(out, filterList(open, word, "on another machine")...)
-	return append(out, filterList(closed, word, "on another machine: it must join there with --accept-external")...)
+	m.setStatus(what+" copied", false)
 }
 
-// openLocal opens the chosen agents of this machine to guests. Choosing them
-// is the consent, and it lasts only as long as each agent's current session.
-func openLocal(act Actions, node string, targets []string) error {
-	for _, t := range targets {
-		if agent, ok := strings.CutPrefix(t, node+"."); ok && node != "" {
-			if err := act.OpenToGuests(agent); err != nil {
-				return err
-			}
+type contactsMsg struct {
+	list []relay.Contact
+	err  error
+}
+
+func scanContacts(act Actions) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), actionTimeout)
+		defer cancel()
+		list, err := act.Contacts(ctx)
+		return contactsMsg{list: list, err: err}
+	}
+}
+
+// onContacts asks at once when a web AI writes to an agent for the first time.
+func (m *Model) onContacts(msg contactsMsg) {
+	if msg.err != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, c := range m.contacts {
+		known[c.ID] = true
+	}
+	m.contacts = msg.list
+	for i, c := range msg.list {
+		if known[c.ID] {
+			continue
+		}
+		m.setStatus(fmt.Sprintf("%s wants to talk to %s", c.Guest, c.Address), false)
+		if m.confirm == nil && m.secret == nil && m.detail == nil && m.mode == inputOff {
+			m.tab, m.cursor[tabGuests] = tabGuests, len(m.signins)+i
+			m.confirm = m.contactAction(true, c)
 		}
 	}
-	return nil
+	m.clampCursors()
+}
+
+func (m Model) selectedContact() (relay.Contact, bool) {
+	key := strings.TrimPrefix(m.selectedKey(), "contact/")
+	for _, c := range m.contacts {
+		if c.ID == key {
+			return c, true
+		}
+	}
+	return relay.Contact{}, false
+}
+
+func (m Model) contactAction(approve bool, c relay.Contact) *confirmation {
+	act := m.act
+	if !approve {
+		return &confirmation{prompt: fmt.Sprintf("Refuse %s talking to %s? [y/N]", c.Guest, c.Address), cmd: run("refused "+c.Guest, func(ctx context.Context) (*secretNote, error) {
+			return nil, act.DecideContact(ctx, c.ID, false)
+		})}
+	}
+	return &confirmation{
+		prompt: fmt.Sprintf("%s wants to talk to %s. Allow while that session lasts? [y/N]", c.Guest, c.Address),
+		cmd: run(c.Guest+" may talk to "+c.Address, func(ctx context.Context) (*secretNote, error) {
+			return nil, act.DecideContact(ctx, c.ID, true)
+		}),
+	}
 }

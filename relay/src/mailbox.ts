@@ -289,9 +289,11 @@ function sanitizeAgents(input: unknown): AgentInfo[] | null {
   const out: AgentInfo[] = [];
   for (const item of input) {
     if (typeof item !== "object" || item === null) return null;
-    const { name, kind, accept_external } = item as Record<string, unknown>;
+    const { name, kind, accept_external, session } = item as Record<string, unknown>;
     if (typeof name !== "string" || !AGENT_RE.test(name)) return null;
-    out.push({ name, kind: typeof kind === "string" ? kind.slice(0, 16) : "agent", accept_external: accept_external === true });
+    const info: AgentInfo = { name, kind: typeof kind === "string" ? kind.slice(0, 16) : "agent", accept_external: accept_external === true };
+    if (typeof session === "string" && /^[A-Za-z0-9._-]{1,64}$/.test(session)) info.session = session;
+    out.push(info);
   }
   return out;
 }

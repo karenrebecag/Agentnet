@@ -61,6 +61,7 @@ type Model struct {
 
 	sessions    []sessions.Session
 	signins     []relay.Signin
+	contacts    []relay.Contact
 	ticks       int
 	wizard      *wizard
 
@@ -107,7 +108,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) scan() tea.Cmd {
 	cmds := []tea.Cmd{scanSessions(m.act, m.snap.Agents)}
 	if m.info.Relay != "" {
-		cmds = append(cmds, scanSignins(m.act))
+		cmds = append(cmds, scanSignins(m.act), scanContacts(m.act))
 	}
 	return tea.Batch(cmds...)
 }
@@ -134,6 +135,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampCursors()
 	case signinsMsg:
 		m.onSignins(msg)
+	case contactsMsg:
+		m.onContacts(msg)
 	case pollMsg:
 		m.onPoll(msg)
 	case remoteMsg:
