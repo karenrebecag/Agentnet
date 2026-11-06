@@ -26,7 +26,6 @@ jobs:
           version: "~> v2"
           args: check
   relay:
-    if: ${{ hashFiles('relay/package.json') != '' }}
     runs-on: ubuntu-latest
     defaults:
       run:
