@@ -84,7 +84,9 @@ func (l Local) PairGuest(ctx context.Context, name string) (relay.Pairing, error
 	return relay.PairNode(ctx, l.Home, name, "")
 }
 
-func (l Local) Signins(ctx context.Context) ([]relay.Signin, error) { return relay.ListSignins(ctx, l.Home) }
+func (l Local) Signins(ctx context.Context) ([]relay.Signin, error) {
+	return relay.ListSignins(ctx, l.Home)
+}
 
 func (l Local) DecideSignin(ctx context.Context, id string, approve bool) error {
 	return relay.DecideSignin(ctx, l.Home, id, approve)
