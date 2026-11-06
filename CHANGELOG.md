@@ -4,10 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
 ### Added
 
 - Relay: OAuth 2.1 sign-in for guests, so assistants that only speak OAuth (claude.ai, Perplexity) can connect. A pairing code bound to the client's host proves ownership of the guest; refresh tokens rotate with reuse detection; revoking the guest ends every grant.
 - Relay: `inbox` and `wait` tools for guests created with `inbox`, so their agents can write first.
+- `relay node pair <guest> --for <host>`: prints a one-use pairing code bound to the client's host, and `relay node add --inbox`.
 
 ### Changed
 
