@@ -80,11 +80,18 @@ Delivery is at least once. On every connection the relay redelivers everything a
 
 ## Guests: `POST /mcp`
 
-A stateless Streamable HTTP MCP endpoint, authenticated with a `guest` token. Its tools have the same names and meaning as `expose`:
+A stateless Streamable HTTP MCP endpoint. A guest authenticates with its static token (`Authorization: Bearer an_…`, for curl or clients that take an API key) or with an OAuth access token (see [Signing in from a web client](#signing-in-from-a-web-client)). Its tools have the same names and meaning as `expose`:
 
 - `list_agents`: the agents this guest may ask, with `live` status.
 - `ask {to, text, wait_seconds}`: send and wait up to 50 s for a reply.
 - `get_reply {id, wait_seconds}`: collect a reply later. Ids are bound to the guest that asked.
+
+A guest created with `inbox: true` also gets:
+
+- `inbox`: read and clear messages its agents sent without being asked. Delivery is at most once: a message is gone once handed out, even if the response is lost on the way.
+- `wait {wait_seconds}`: wait up to 50 s for the next one. MCP gives a web client no way to be woken up between turns (no supported client implements sampling or resource subscriptions), so a client listens by calling `wait` in a loop during a turn.
+
+Only an agent in the guest's `targets` can write to its inbox, at most 10 messages a minute and 200 a day per agent. Everything else a machine sends to `<guest>.mcp` must be the one reply to an `ask`.
 
 A guest can reach an agent only if both are true:
 
@@ -97,10 +104,36 @@ Authenticated with `ADMIN_TOKEN`.
 
 | method | path | body | result |
 |---|---|---|---|
-| `POST` | `/v1/admin/nodes` | `{name, kind, targets?}` | `{name, token}` |
+| `POST` | `/v1/admin/nodes` | `{name, kind, targets?, inbox?}` | `{name, token}` |
 | `GET` | `/v1/admin/nodes` | | `[{name, kind, targets, revoked, created, last_seen, agents}]`, never token hashes |
 | `POST` | `/v1/admin/nodes/{name}/rotate` | | `{token}` |
-| `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}` |
+| `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}`. Also ends every OAuth grant of a guest |
+| `POST` | `/v1/admin/nodes/{name}/pair` | `{for: "claude.ai"}` | `{code, expires, connector_url}` |
+
+## Signing in from a web client
+
+claude.ai, Perplexity and other assistants connect to remote MCP servers with OAuth, so the relay is also an OAuth 2.1 authorization server for its guests. It follows the [MCP authorization spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization):
+
+- `/mcp` answers an unauthenticated call with `401` and `WWW-Authenticate: Bearer resource_metadata=…`.
+- `/.well-known/oauth-protected-resource` (RFC 9728) names this host as the authorization server; `/.well-known/oauth-authorization-server` (RFC 8414) advertises PKCE `S256`, public clients only, and Client ID Metadata Documents.
+- Clients identify themselves with a Client ID Metadata Document (preferred; Dynamic Client Registration is deprecated as of MCP 2026-07-28) or register at `/oauth/register`.
+
+There is no account to log in to. The person proves they own a guest with a **pairing code**:
+
+```bash
+agentnet relay node add claude-web --kind guest --targets laptop.claude [--inbox]
+agentnet relay node pair claude-web --for claude.ai     # prints the code once and the connector URL
+```
+
+Add the connector URL in the assistant. Its sign-in opens the relay's consent page, which shows the client and the full address it returns to; the person types the code there. The code:
+
+- works once, for 10 minutes;
+- is bound to the host given with `--for`: a client that returns anywhere else is refused, so a code read over someone's shoulder cannot be used from another site;
+- is stored only as a hash. Five wrong codes from one address lock that address out of the consent page for 15 minutes; nobody else's pairing is affected. A pairing cannot be bound to a host where anyone can get a subdomain (`workers.dev`, `vercel.app`, `github.io`, ...).
+
+Tokens: access tokens last 1 hour; refresh tokens last 30 days and rotate on every use, and presenting a used one ends the whole grant. A sign-in lasts at most 90 days however often it refreshes. Rotating or revoking the guest ends its sign-ins. Access tokens are bound to this relay's `/mcp` (RFC 8707) and resolve to the guest, so routing and limits are the same as with the static token. Revoking the guest ends all of it at once.
+
+The consent page runs no script, cannot be framed, and its form posts only to this host. It is the only route that accepts a browser `Origin`, and only its own.
 
 ## Limits
 
@@ -109,6 +142,7 @@ Authenticated with `ADMIN_TOKEN`.
 - Per ask: one reply.
 - Queue: at most 1,000 unacked messages per node, at most 250 of them from one sender. Messages expire after 7 days.
 - Authentication failures from one IP: 10 per 60 seconds (Workers Rate Limiting binding, per location), then 429. Valid tokens are never counted.
+- OAuth endpoints: 30 requests per minute per IP. Dynamic registration: 10 per IP per hour; at most 200 clients waiting for their first sign-in (the oldest is dropped past that), and an unused registration expires after 1 hour. At most 1,000 open consent pages.
 
 ## Local side
 

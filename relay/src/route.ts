@@ -52,7 +52,10 @@ export async function route(env: Env, req: SendRequest): Promise<SendResult> {
 
   if (target.kind === "guest") {
     // A guest only ever receives answers to its own asks, from the agent it asked.
-    if (sender.kind !== "machine" || dest.agent !== GUEST_AGENT || !req.replyTo) return reject("recipient not allowed");
+    if (sender.kind !== "machine" || dest.agent !== GUEST_AGENT) return reject("recipient not allowed");
+    // Without reply_to this is an unsolicited message: only for a guest that
+    // opted in, and only from an agent the guest itself may ask.
+    if (!req.replyTo && !(target.inbox && target.targets.includes(from))) return reject("recipient not allowed");
   } else if (sender.kind === "guest") {
     const announced = target.agents.find((a) => a.name === dest.agent);
     if (!sender.targets.includes(req.to) || !announced?.accept_external) return reject("recipient not allowed");
@@ -60,5 +63,6 @@ export async function route(env: Env, req: SendRequest): Promise<SendResult> {
 
   const envelope: Envelope = { id: req.id ?? randomHex(16), ts: now(), from, to: req.to, text, origin };
   if (req.replyTo) envelope.reply_to = req.replyTo;
-  return target.kind === "guest" ? box.enqueueReply(envelope) : box.enqueue(envelope);
+  if (target.kind === "guest") return req.replyTo ? box.enqueueReply(envelope) : box.enqueueInbox(envelope);
+  return box.enqueue(envelope);
 }

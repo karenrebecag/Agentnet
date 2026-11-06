@@ -2,6 +2,7 @@ export interface Env {
   DIRECTORY: DurableObjectNamespace<import("./directory").Directory>;
   MAILBOX: DurableObjectNamespace<import("./mailbox").Mailbox>;
   AUTH_FAILURES?: RateLimit;
+  OAUTH_LIMIT?: RateLimit;
   ADMIN_TOKEN: string;
 }
 
@@ -27,6 +28,8 @@ export interface Envelope {
 export interface NodeRecord {
   name: string;
   kind: NodeKind;
+  // A guest with inbox on can be written to by its targets without asking first.
+  inbox: boolean;
   targets: string[];
   revoked: boolean;
   created: string;
@@ -60,11 +63,20 @@ export function randomHex(bytes: number): string {
   return [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export function newToken(): string {
+export function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Every secret the relay issues is a prefix plus 32 random bytes. The prefix
+// says what it is, so a refresh token can never be presented as a node token.
+export function newSecret(prefix: string): string {
   const buf = new Uint8Array(32);
   crypto.getRandomValues(buf);
-  const b64 = btoa(String.fromCharCode(...buf)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return `an_${b64}`;
+  return prefix + base64url(buf);
+}
+
+export function newToken(): string {
+  return newSecret("an_");
 }
 
 export async function sha256Hex(text: string): Promise<string> {
@@ -83,6 +95,9 @@ export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
 
 // Shape of every token newToken() issues: "an_" plus 32 bytes in base64url.
 export const TOKEN_RE = /^an_[A-Za-z0-9_-]{43}$/;
+// OAuth access and refresh tokens, issued to guests that signed in through a client.
+export const ACCESS_RE = /^ana_[A-Za-z0-9_-]{43}$/;
+export const REFRESH_RE = /^anr_[A-Za-z0-9_-]{43}$/;
 
 export function bearer(request: Request): string | null {
   const header = request.headers.get("Authorization") ?? "";

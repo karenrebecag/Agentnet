@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Relay: OAuth 2.1 sign-in for guests, so assistants that only speak OAuth (claude.ai, Perplexity) can connect. A pairing code bound to the client's host proves ownership of the guest; refresh tokens rotate with reuse detection; revoking the guest ends every grant.
+- Relay: `inbox` and `wait` tools for guests created with `inbox`, so their agents can write first.
+
 ### Changed
 
 - `watch` is now a network manager: tabs for agents, relay nodes, guests and messages, a filter, and actions on the selected row (add, rotate, revoke, approve). The same actions run as `/` commands with zsh-style completion of node names and `node.agent` addresses. Destructive actions ask first, and a new token is shown once and never logged. Expose and relay guests stay separate, so an action always reaches the store its row came from.
