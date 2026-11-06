@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/karenrebecag/agentnet/internal/relay"
 )
@@ -22,6 +23,8 @@ func (e env) relay(args []string) (int, error) {
 		return e.relayAdminToken(args[1:])
 	case "node":
 		return e.relayNode(args[1:])
+	case "signins":
+		return e.relaySignins(args[1:])
 	default:
 		return ExitError, fmt.Errorf("unknown relay command %q", args[0])
 	}
@@ -116,16 +119,13 @@ func (e env) relayNodeAdd(args []string) (int, error) {
 func (e env) relayNodePair(args []string) (int, error) {
 	fs := flag.NewFlagSet("relay node pair", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
-	host := fs.String("for", "", "hostname this pairing code is bound to")
+	host := fs.String("for", "", "hostname to bind the code to; without it you approve the host when the client signs in")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return ExitError, err
 	}
 	if len(pos) != 1 {
 		return ExitError, fmt.Errorf("relay node pair needs a guest name")
-	}
-	if *host == "" {
-		return ExitError, fmt.Errorf("relay node pair needs --for")
 	}
 	p, err := relay.PairNode(context.Background(), e.store.Home, pos[0], *host)
 	if err != nil {
@@ -139,6 +139,44 @@ func (e env) relayNodePair(args []string) (int, error) {
 	if p.Expires != "" {
 		fmt.Fprintln(e.stdout, p.Expires)
 	}
+	return ExitOK, nil
+}
+
+// relaySignins lists the clients waiting for approval, or answers one.
+func (e env) relaySignins(args []string) (int, error) {
+	ctx := context.Background()
+	if len(args) == 0 || args[0] == "list" {
+		list, err := relay.ListSignins(ctx, e.store.Home)
+		if err != nil {
+			return ExitError, err
+		}
+		for _, s := range list {
+			fmt.Fprintf(e.stdout, "%s\t%s\tas=%s\tclient=%s\tip=%s\texpires=%s\n", s.ID, printable(s.Host), s.Guest, printable(s.ClientName), s.IP, s.Expires)
+		}
+		return ExitOK, nil
+	}
+	if len(args) != 2 || (args[0] != "approve" && args[0] != "deny") {
+		return ExitError, fmt.Errorf("relay signins needs list, approve <id> or deny <id>")
+	}
+	// Approving by id alone would hide where the client returns; say it first.
+	list, err := relay.ListSignins(ctx, e.store.Home)
+	if err != nil {
+		return ExitError, err
+	}
+	var host, guest string
+	for _, s := range list {
+		if s.ID == args[1] {
+			host, guest = printable(s.Host), s.Guest
+		}
+	}
+	if host == "" {
+		return ExitError, fmt.Errorf("no sign-in is waiting with id %s", args[1])
+	}
+	if err := relay.DecideSignin(ctx, e.store.Home, args[1], args[0] == "approve"); err != nil {
+		return ExitError, err
+	}
+	done := map[string]string{"approve": "approved", "deny": "denied"}[args[0]]
+	fmt.Fprintf(e.stdout, "%s %s: %s as %s\n", done, args[1], host, guest)
 	return ExitOK, nil
 }
 
@@ -201,4 +239,14 @@ func (e env) oneName(label string, args []string) (string, error) {
 		return "", fmt.Errorf("%s needs a name", label)
 	}
 	return pos[0], nil
+}
+
+// printable drops control characters from relay text a stranger chose.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
 }

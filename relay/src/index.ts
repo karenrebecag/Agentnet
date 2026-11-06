@@ -62,6 +62,12 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     const result = await directory.create(String(body.name ?? ""), body.kind as NodeKind, targets, body.inbox === true);
     return "error" in result ? json(result, 400) : json({ name: body.name, token: result.token }, 201);
   }
+  if (path === "/v1/admin/signins" && request.method === "GET") return json(await directory.listSignins());
+  const signin = /^\/v1\/admin\/signins\/([0-9a-f]{8})\/(approve|deny)$/.exec(path);
+  if (signin && request.method === "POST") {
+    if (!(await directory.decideSignin(signin[1], signin[2] === "approve"))) return json({ error: "no sign-in is waiting with that id" }, 404);
+    return json({});
+  }
   const match = /^\/v1\/admin\/nodes\/([a-z][a-z0-9-]{0,31})\/(rotate|revoke|pair)$/.exec(path);
   if (match && request.method === "POST") {
     const [, name, action] = match;
@@ -70,13 +76,13 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
       if (raw.length > MAX_ADMIN_BODY) return json({ error: "body too large" }, 413);
       let host = "";
       try {
-        const parsed = JSON.parse(raw);
+        const parsed = raw.trim() === "" ? {} : JSON.parse(raw);
         host = typeof parsed?.for === "string" ? parsed.for.trim().toLowerCase() : "";
       } catch {
         return json({ error: "invalid JSON" }, 400);
       }
-      if (!HOST_RE.test(host)) return json({ error: "for must be a hostname such as claude.ai, or localhost" }, 400);
-      if (sharedSuffix(host)) return json({ error: `${host} hands out subdomains to anyone; name the client's own host` }, 400);
+      if (host !== "" && !HOST_RE.test(host)) return json({ error: "for must be a hostname such as claude.ai, or localhost" }, 400);
+      if (host !== "" && sharedSuffix(host)) return json({ error: `${host} hands out subdomains to anyone; name the client's own host` }, 400);
       const result = await directory.pair(name, host);
       if ("error" in result) return json(result, result.error.startsWith("unknown") ? 404 : 400);
       return json({ ...result, connector_url: `${new URL(request.url).origin}/mcp` }, 201);

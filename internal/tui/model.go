@@ -12,6 +12,7 @@ import (
 
 	"github.com/karenrebecag/agentnet/internal/core"
 	"github.com/karenrebecag/agentnet/internal/relay"
+	"github.com/karenrebecag/agentnet/internal/sessions"
 )
 
 const pollEvery = 500 * time.Millisecond
@@ -58,6 +59,12 @@ type Model struct {
 	relayErr error
 	loaded   bool
 
+	sessions    []sessions.Session
+	sessionsErr error
+	signins     []relay.Signin
+	ticks       int
+	wizard      *wizard
+
 	tab    tabID
 	cursor [tabCount]int
 	filter [tabCount]string
@@ -93,7 +100,17 @@ func tick() tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.poll(), tick())
+	return tea.Batch(m.poll(), tick(), m.scan())
+}
+
+// scan refreshes what changes on its own: the open CLIs and, with a relay,
+// the clients waiting for a yes.
+func (m Model) scan() tea.Cmd {
+	cmds := []tea.Cmd{scanSessions(m.act, m.snap.Agents)}
+	if m.info.Relay != "" {
+		cmds = append(cmds, scanSignins(m.act))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -104,7 +121,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 	case tickMsg:
 		m.now = time.Time(msg)
+		m.ticks++
+		if m.ticks%scanEvery == 0 {
+			return m, tea.Batch(m.poll(), tick(), m.scan())
+		}
 		return m, tea.Batch(m.poll(), tick())
+	case sessionsMsg:
+		m.sessions, m.sessionsErr = msg.list, msg.err
+		m.clampCursors()
+	case signinsMsg:
+		m.onSignins(msg)
 	case pollMsg:
 		m.onPoll(msg)
 	case remoteMsg:
@@ -118,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.setStatus(msg.done, false)
 		m.secret = msg.secret
-		return m, m.reload()
+		return m, tea.Batch(m.reload(), m.scan())
 	}
 	return m, nil
 }

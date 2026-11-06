@@ -3,6 +3,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -46,6 +48,7 @@ func (m Model) onInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.mode == inputCommand {
 			m.input.SetValue("")
 		}
+		m.wizard = nil
 		m.mode = inputOff
 		m.input.Blur()
 		return m, nil
@@ -58,7 +61,7 @@ func (m Model) onInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "right":
 		if len(options) > 0 {
 			line := m.input.Value()
-			m.input.SetValue(accept(line, options[min(m.pick, len(options)-1)], completingList(line)))
+			m.input.SetValue(accept(line, options[min(m.pick, len(options)-1)], m.wizard != nil || completingList(line)))
 			m.pick = 0
 		}
 		return m, nil
@@ -68,7 +71,13 @@ func (m Model) onInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Blur()
 			return m, nil
 		}
+		if m.wizard != nil {
+			return m.wizardEnter()
+		}
 		line := m.input.Value()
+		if strings.TrimSpace(line) == "/add" {
+			return m.startWizard()
+		}
 		m.mode = inputOff
 		m.input.Blur()
 		m.input.SetValue("")
@@ -98,6 +107,9 @@ func (m Model) suggestions() []suggestion {
 	if m.mode != inputCommand {
 		return nil
 	}
+	if m.wizard != nil {
+		return m.wizardSuggestions()
+	}
 	return m.completions().suggest(m.input.Value())
 }
 
@@ -115,7 +127,7 @@ func (m Model) onTableKey(key string) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.cursor[m.tab] = max(0, m.cursor[m.tab]-1)
 	case "down", "j":
-		m.cursor[m.tab] = min(rows-1, m.cursor[m.tab]+1)
+		m.cursor[m.tab] = max(0, min(rows-1, m.cursor[m.tab]+1))
 	case "home", "g":
 		m.cursor[m.tab] = 0
 	case "end", "G":
@@ -130,6 +142,9 @@ func (m Model) onTableKey(key string) (tea.Model, tea.Cmd) {
 	case "u":
 		return m, m.reload()
 	case "enter":
+		if m.tab == tabSessions {
+			return m.copyJoin(false)
+		}
 		if e, ok := m.selectedMessage(); ok && m.tab == tabMessages {
 			m.detail = &e
 		}
@@ -141,6 +156,10 @@ func (m Model) onTableKey(key string) (tea.Model, tea.Cmd) {
 
 func (m Model) onRowAction(key string) (tea.Model, tea.Cmd) {
 	switch m.tab {
+	case tabSessions:
+		if key == "e" {
+			return m.copyJoin(true)
+		}
 	case tabNodes:
 		if key == "a" {
 			return m.startCommand("/node ")
@@ -157,7 +176,16 @@ func (m Model) onRowAction(key string) (tea.Model, tea.Cmd) {
 		}
 	case tabGuests:
 		if key == "n" {
-			return m.startCommand("/guest relay ")
+			return m.startWizard()
+		}
+		if s, ok := m.selectedSignin(); ok {
+			switch key {
+			case "a":
+				m.confirm = m.signinAction(true, s)
+			case "x":
+				m.confirm = m.signinAction(false, s)
+			}
+			return m, nil
 		}
 		g, ok := m.selectedGuest()
 		if !ok {
@@ -192,7 +220,10 @@ func (m Model) switchTab(t tabID) (tea.Model, tea.Cmd) {
 	m.input.SetValue(m.filter[t])
 	// Relay data is fetched on entering its tabs and on u, never on a timer.
 	if (t == tabNodes || t == tabGuests) && !m.busy {
-		return m, m.reload()
+		return m, tea.Batch(m.reload(), m.scan())
+	}
+	if t == tabSessions {
+		return m, m.scan()
 	}
 	return m, nil
 }

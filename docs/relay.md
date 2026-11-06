@@ -108,7 +108,9 @@ Authenticated with `ADMIN_TOKEN`.
 | `GET` | `/v1/admin/nodes` | | `[{name, kind, targets, revoked, created, last_seen, agents}]`, never token hashes |
 | `POST` | `/v1/admin/nodes/{name}/rotate` | | `{token}` |
 | `POST` | `/v1/admin/nodes/{name}/revoke` | | `{}`. Also ends every OAuth grant of a guest |
-| `POST` | `/v1/admin/nodes/{name}/pair` | `{for: "claude.ai"}` | `{code, expires, connector_url}` |
+| `POST` | `/v1/admin/nodes/{name}/pair` | `{for?: "claude.ai"}` | `{code, expires, connector_url}`. Without `for` the code is unbound |
+| `GET` | `/v1/admin/signins` | | `[{id, guest, client, client_name, host, ip, created, expires}]`: clients waiting for approval |
+| `POST` | `/v1/admin/signins/{id}/approve` or `/deny` | | `{}` |
 
 ## Signing in from a web client
 
@@ -118,22 +120,31 @@ claude.ai, Perplexity and other assistants connect to remote MCP servers with OA
 - `/.well-known/oauth-protected-resource` (RFC 9728) names this host as the authorization server; `/.well-known/oauth-authorization-server` (RFC 8414) advertises PKCE `S256`, public clients only, and Client ID Metadata Documents.
 - Clients identify themselves with a Client ID Metadata Document (preferred; Dynamic Client Registration is deprecated as of MCP 2026-07-28) or register at `/oauth/register`.
 
-There is no account to log in to. The person proves they own a guest with a **pairing code**:
+There is no account to log in to. The person proves they own a guest with a **pairing code**, and the same steps work for any assistant:
+
+1. In `agentnet watch`, type `/add` (or press `n` on the Guests tab): a name, then the agents it can talk to. The screen shows the connector URL and the code once.
+2. Add the URL as a custom connector in the assistant and connect. The relay's consent page shows the client and the address it returns to; type the code there.
+3. The page waits. In `watch`, the sign-in shows in Guests as waiting, with the host it returns to; select it and press `a`, or run `agentnet relay signins approve <id>`.
+
+From the command line the same is:
 
 ```bash
-agentnet relay node add claude-web --kind guest --targets laptop.claude [--inbox]
-agentnet relay node pair claude-web --for claude.ai     # prints the code once and the connector URL
+agentnet relay node add claude-web --kind guest --targets laptop.claude --inbox
+agentnet relay node pair claude-web             # prints the code once and the connector URL
+agentnet relay signins                          # who is waiting
+agentnet relay signins approve 0a1b2c3d
 ```
 
-Add the connector URL in the assistant. Its sign-in opens the relay's consent page, which shows the client and the full address it returns to; the person types the code there. The code:
+The code:
 
 - works once, for 10 minutes;
-- is bound to the host given with `--for`: a client that returns anywhere else is refused, so a code read over someone's shoulder cannot be used from another site;
-- is stored only as a hash. Five wrong codes from one address lock that address out of the consent page for 15 minutes; nobody else's pairing is affected. A pairing cannot be bound to a host where anyone can get a subdomain (`workers.dev`, `vercel.app`, `github.io`, ...).
+- is spent when the first client uses it; that client then waits up to 10 minutes for the person's answer on their own machine. Approval happens there, not on a web page, so a code someone was tricked into typing on a stranger's sign-in gives nothing unless the person also approves a host they do not recognize;
+- can instead be bound to a host up front with `--for claude.ai`, for scripts: a client that returns anywhere else is refused and no approval is asked. A code cannot be bound to a host where anyone can get a subdomain (`workers.dev`, `vercel.app`, `github.io`, ...);
+- is stored only as a hash. Five wrong codes from one address lock that address out of the consent page for 15 minutes; nobody else's pairing is affected.
 
 Tokens: access tokens last 1 hour; refresh tokens last 30 days and rotate on every use, and presenting a used one ends the whole grant. A sign-in lasts at most 90 days however often it refreshes. Rotating or revoking the guest ends its sign-ins. Access tokens are bound to this relay's `/mcp` (RFC 8707) and resolve to the guest, so routing and limits are the same as with the static token. Revoking the guest ends all of it at once.
 
-The consent page runs no script, cannot be framed, and its form posts only to this host. It is the only route that accepts a browser `Origin`, and only its own.
+The consent and waiting pages run no script (the waiting page reloads with `<meta http-equiv="refresh">`), cannot be framed, and its form posts only to this host. It is the only route that accepts a browser `Origin`, and only its own.
 
 ## Limits
 

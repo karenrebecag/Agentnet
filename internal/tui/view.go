@@ -16,8 +16,9 @@ type hotkey struct{ key, label string }
 
 var tabKeys = [tabCount][]hotkey{
 	{},
+	{{"↵", "Copy join line"}, {"e", "Join open to guests"}},
 	{{"a", "Add"}, {"r", "Rotate"}, {"x", "Revoke"}},
-	{{"n", "New"}, {"a", "Approve"}, {"x", "Revoke"}},
+	{{"n", "Add web AI"}, {"a", "Approve"}, {"x", "Revoke/Deny"}},
 	{{"↵", "Read"}},
 }
 
@@ -63,6 +64,8 @@ func (m Model) prompt(width int) string {
 	}
 	var line string
 	switch {
+	case m.wizard != nil:
+		line = section.Render(wizardQuestions[m.wizard.step]) + m.input.View(m.ghost())
 	case m.mode == inputCommand:
 		line = m.input.View(m.ghost())
 	case m.mode == inputFilter:
@@ -152,8 +155,8 @@ func (m Model) tabs(width int) string {
 	parts := make([]string, tabCount)
 	for t := tabID(0); t < tabCount; t++ {
 		label := tabNames[t]
-		if t == tabGuests && len(m.snap.Pending) > 0 {
-			label += fmt.Sprintf(" (%d pending)", len(m.snap.Pending))
+		if waiting := len(m.snap.Pending) + len(m.signins); t == tabGuests && waiting > 0 {
+			label += fmt.Sprintf(" (%d waiting)", waiting)
 		}
 		if t == m.tab {
 			parts[t] = tab_.Render(label)
@@ -181,6 +184,8 @@ func (m Model) body(width, height int) string {
 		return m.detailView(width)
 	case (m.tab == tabNodes || m.tab == tabGuests) && !m.loaded:
 		return " " + dim.Render("loading…")
+	case m.tab == tabSessions && m.sessionsErr != nil:
+		return " " + down.Render(m.sessionsErr.Error())
 	case m.tab == tabNodes && m.relayErr != nil:
 		return " " + down.Render("relay: "+m.relayErr.Error()) + "\n " + dim.Render("set one up with agentnet relay init --url <url> and agentnet relay admin-token")
 	}

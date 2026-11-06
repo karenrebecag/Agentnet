@@ -7,9 +7,11 @@ import {
   MAX_PENDING_CLIENTS,
   MAX_REGISTRATIONS_PER_IP,
   MAX_REQUESTS,
+  MAX_SIGNINS,
   PAIR_FAILURE_LIMIT,
   PAIR_TTL_MS,
   REQUEST_TTL_MS,
+  SIGNIN_TTL_MS,
   dropGrant,
   dropGuest,
   hostAllowed,
@@ -52,6 +54,20 @@ export type AuthRequest = {
 
 type Failure = { error: string; description: string };
 
+/** A sign-in that used a code with no host, waiting for the person to say yes. */
+export interface Signin {
+  id: string;
+  guest: string;
+  client: string;
+  client_name: string;
+  host: string;
+  ip: string;
+  created: string;
+  expires: string;
+}
+
+type SigninRow = AuthRequest & { id: string; guest: string; client_name: string; host: string; ip: string; status: string; created: number; expires: number };
+
 type Row = {
   name: string;
   kind: NodeKind;
@@ -74,6 +90,13 @@ function toRecord(row: Row): NodeRecord {
     last_seen: row.last_seen,
     agents: JSON.parse(row.agents),
     inbox: row.inbox === 1,
+  };
+}
+
+function toSignin(r: SigninRow): Signin {
+  return {
+    id: r.id, guest: r.guest, client: r.client, client_name: r.client_name, host: r.host, ip: r.ip,
+    created: new Date(r.created).toISOString(), expires: new Date(r.expires).toISOString(),
   };
 }
 
@@ -167,7 +190,11 @@ export class Directory extends DurableObject<Env> {
 
   // ---- OAuth: pairing ----
 
-  /** Issues a one-use code that lets a client sign in as this guest, for one host. */
+  /**
+   * Issues a one-use code that lets a client sign in as this guest. With a host
+   * the code only works for that client; with "" the first client to use it
+   * waits until the person approves the host it returns to.
+   */
   async pair(name: string, host: string): Promise<{ code: string; expires: string } | { error: string }> {
     const row = this.row(name);
     if (!row || row.revoked || row.kind !== "guest") return { error: "unknown, revoked or not a guest" };
@@ -232,7 +259,7 @@ export class Directory extends DurableObject<Env> {
    * The consent step. The request is consumed whatever happens, so a form can
    * be submitted once; a wrong code counts toward burning every open pairing.
    */
-  async approve(requestId: string, typed: string, ip: string): Promise<{ redirect: string } | { retry: string; message: string } | Failure> {
+  async approve(requestId: string, typed: string, ip: string): Promise<{ redirect: string } | { waiting: string } | { retry: string; message: string } | Failure> {
     const reqHash = await sha256Hex(requestId);
     if (this.failures(ip) >= PAIR_FAILURE_LIMIT) {
       return { error: "temporarily_unavailable", description: "too many wrong codes from this address; wait 15 minutes" };
@@ -246,7 +273,7 @@ export class Directory extends DurableObject<Env> {
       "SELECT hash, guest, host FROM pairings WHERE hash = ? AND expires > ?", await sha256Hex(normalizePairCode(typed)), Date.now()).toArray()[0];
     let message = "";
     if (!pairing) message = "That code is not valid or has expired.";
-    else if (!hostAllowed(req.redirect, pairing.host)) {
+    else if (pairing.host !== "" && !hostAllowed(req.redirect, pairing.host)) {
       message = `That code is for ${pairing.host}, but this client returns to ${new URL(req.redirect).host}.`;
     }
     if (message) {
@@ -255,7 +282,32 @@ export class Directory extends DurableObject<Env> {
     }
 
     this.sql.exec("DELETE FROM pairings WHERE hash = ?", pairing!.hash);
-    const guest = this.row(pairing!.guest);
+    if (pairing!.host === "") return { waiting: await this.wait(req, pairing!.guest, ip) };
+    return this.issueCode(pairing!.guest, req);
+  }
+
+  // The code is spent here, so it cannot be tried by a second client while
+  // the first one waits.
+  private async wait(req: AuthRequest, guest: string, ip: string): Promise<string> {
+    // An approved row is one poll away from its code, so waiting rows go first.
+    const over = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM signins").toArray()[0].n - (MAX_SIGNINS - 1);
+    if (over > 0) {
+      this.sql.exec("DELETE FROM signins WHERE id IN (SELECT id FROM signins ORDER BY status = 'waiting' DESC, created LIMIT ?)", over);
+    }
+    const client = await this.client(req.client);
+    const poll = newSecret("anw_");
+    const t = Date.now();
+    this.sql.exec(
+      "INSERT INTO signins (id, poll, guest, client, client_name, redirect, challenge, state, scope, host, ip, created, expires) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      newId().slice(0, 8), await sha256Hex(poll), guest, req.client, client?.name ?? req.client, req.redirect, req.challenge,
+      req.state, req.scope, new URL(req.redirect).host, ip, t, t + SIGNIN_TTL_MS);
+    await this.schedule();
+    return poll;
+  }
+
+  private async issueCode(guestName: string, req: AuthRequest): Promise<{ redirect: string } | Failure> {
+    const guest = this.row(guestName);
     if (!guest || guest.revoked) return { error: "access_denied", description: "the guest was revoked" };
     const grantId = newId();
     this.sql.exec("INSERT INTO grants (id, guest, client, scope, created) VALUES (?, ?, ?, ?, ?)", grantId, guest.name, req.client, req.scope, Date.now());
@@ -267,6 +319,31 @@ export class Directory extends DurableObject<Env> {
     back.searchParams.set("code", code);
     if (req.state) back.searchParams.set("state", req.state);
     return { redirect: back.toString() };
+  }
+
+  /** What the waiting browser sees each time it reloads. */
+  async pollSignin(poll: string): Promise<{ waiting: Signin } | { redirect: string } | Failure> {
+    const hash = await sha256Hex(poll);
+    const row = this.sql.exec<SigninRow>("SELECT * FROM signins WHERE poll = ? AND expires > ?", hash, Date.now()).toArray()[0];
+    if (!row) return { error: "invalid_request", description: "this sign-in expired or was already used; start again from the client" };
+    if (row.status === "waiting") return { waiting: toSignin(row) };
+    this.sql.exec("DELETE FROM signins WHERE id = ?", row.id);
+    if (row.status === "approved") return this.issueCode(row.guest, row);
+    const back = new URL(row.redirect);
+    back.searchParams.set("error", "access_denied");
+    if (row.state) back.searchParams.set("state", row.state);
+    return { redirect: back.toString() };
+  }
+
+  async listSignins(): Promise<Signin[]> {
+    return this.sql.exec<SigninRow>("SELECT * FROM signins WHERE status = 'waiting' AND expires > ? ORDER BY created", Date.now())
+      .toArray().map(toSignin);
+  }
+
+  async decideSignin(id: string, approve: boolean): Promise<boolean> {
+    const changed = this.sql.exec("UPDATE signins SET status = ? WHERE id = ? AND status = 'waiting' AND expires > ?",
+      approve ? "approved" : "denied", id, Date.now()).rowsWritten;
+    return changed > 0;
   }
 
   async deny(requestId: string): Promise<AuthRequest | null> {

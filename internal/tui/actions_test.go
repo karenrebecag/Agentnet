@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/karenrebecag/agentnet/internal/guests"
 	"github.com/karenrebecag/agentnet/internal/relay"
+	"github.com/karenrebecag/agentnet/internal/sessions"
 )
 
 const fakeToken = "an_SECRET_TOKEN_VALUE"
@@ -52,6 +54,29 @@ func (f *fakeActions) RevokeExposeGuest(n string) error {
 	return nil
 }
 
+func (f *fakeActions) AddWebGuest(_ context.Context, n string, t []string) (relay.Pairing, error) {
+	f.calls = append(f.calls, "add-web-guest "+n+" "+strings.Join(t, ","))
+	return relay.Pairing{Code: "ABCD-EFGH", ConnectorURL: "https://relay.example/mcp"}, nil
+}
+func (f *fakeActions) PairGuest(_ context.Context, n string) (relay.Pairing, error) {
+	f.calls = append(f.calls, "pair "+n)
+	return relay.Pairing{Code: "ABCD-EFGH"}, nil
+}
+func (f *fakeActions) Signins(context.Context) ([]relay.Signin, error) {
+	return []relay.Signin{{ID: "0a1b2c3d", Guest: "claude-web", Host: "claude.ai", ClientName: "Claude"}}, nil
+}
+func (f *fakeActions) DecideSignin(_ context.Context, id string, approve bool) error {
+	f.calls = append(f.calls, fmt.Sprintf("signin %s %t", id, approve))
+	return nil
+}
+func (f *fakeActions) Sessions(context.Context, map[int]string) ([]sessions.Session, error) {
+	return []sessions.Session{{PID: 101, Tool: "grok", Name: "grok-011", TTY: "ttys011", State: "open"}}, nil
+}
+func (f *fakeActions) Copy(text string) error {
+	f.calls = append(f.calls, "copy "+text)
+	return nil
+}
+
 // drive feeds keys to the model and runs every command it returns, the way
 // the Bubble Tea runtime would, except the polling tick.
 func drive(t *testing.T, m Model, keys ...string) Model {
@@ -81,15 +106,21 @@ func drive(t *testing.T, m Model, keys ...string) Model {
 }
 
 func settle(m Model, cmd tea.Cmd) Model {
-	for cmd != nil {
-		msg := cmd()
-		if msg == nil {
-			return m
-		}
-		next, more := m.Update(msg)
-		m, cmd = next.(Model), more
+	if cmd == nil {
+		return m
 	}
-	return m
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			m = settle(m, c)
+		}
+		return m
+	}
+	if msg == nil {
+		return m
+	}
+	next, more := m.Update(msg)
+	return settle(next.(Model), more)
 }
 
 func newTestModel(act Actions) Model {
@@ -100,7 +131,7 @@ func newTestModel(act Actions) Model {
 
 func TestRevokeWaitsForConfirmation(t *testing.T) {
 	act := &fakeActions{}
-	m := drive(t, newTestModel(act), "right", "x")
+	m := drive(t, newTestModel(act), "right", "right", "x")
 	if len(act.calls) != 0 || m.confirm == nil {
 		t.Fatalf("revoke ran before confirmation: %v", act.calls)
 	}
@@ -119,8 +150,8 @@ func TestRevokeWaitsForConfirmation(t *testing.T) {
 
 func TestGuestActionsReachTheStoreTheRowCameFrom(t *testing.T) {
 	act := &fakeActions{}
-	// Same name in both stores: rows sort relay first, then expose.
-	m := drive(t, newTestModel(act), "right", "right")
+	// Same name in both stores: after the waiting sign-in, relay first, then expose.
+	m := drive(t, newTestModel(act), "right", "right", "right", "down")
 	m = drive(t, m, "a")
 	if m.confirm != nil || len(act.calls) != 0 {
 		t.Fatal("a relay guest has no approve step")
@@ -133,8 +164,8 @@ func TestGuestActionsReachTheStoreTheRowCameFrom(t *testing.T) {
 
 func TestNewTokenStaysOutOfStatusAndLog(t *testing.T) {
 	act := &fakeActions{}
-	m := drive(t, newTestModel(act), "right", "right", "n")
-	m = drive(t, m, splitKeys("gemini mac.claude")...)
+	m := drive(t, newTestModel(act), "/")
+	m = drive(t, m, splitKeys("guest relay gemini mac.claude")...)
 	m = drive(t, m, "enter")
 	if strings.Join(act.calls, ";") != "add-relay-guest gemini mac.claude" {
 		t.Fatalf("calls = %v", act.calls)
@@ -162,3 +193,37 @@ func TestInputIsNeverSentAsAMessage(t *testing.T) {
 }
 
 func splitKeys(s string) []string { return strings.Split(s, "") }
+
+func TestAddAsksNameThenAgentsAndShowsTheCode(t *testing.T) {
+	act := &fakeActions{}
+	m := drive(t, newTestModel(act), "/")
+	m = drive(t, m, append(append(splitKeys("add"), "enter"), splitKeys("claude-web")...)...)
+	m = drive(t, m, "enter")
+	m = drive(t, m, append(splitKeys("mac.claude"), "enter")...)
+	if strings.Join(act.calls, ";") != "add-web-guest claude-web mac.claude" {
+		t.Fatalf("calls = %v", act.calls)
+	}
+	if m.secret == nil || m.secret.token != "ABCD-EFGH" || !strings.Contains(m.secret.hint, "https://relay.example/mcp") {
+		t.Fatalf("the code and connector URL must be shown: %+v", m.secret)
+	}
+}
+
+func TestSigninWaitsForConfirmation(t *testing.T) {
+	act := &fakeActions{}
+	m := drive(t, newTestModel(act), "right", "right", "right", "a")
+	if len(act.calls) != 0 || m.confirm == nil || !strings.Contains(m.confirm.prompt, "claude.ai") || !strings.Contains(m.confirm.prompt, "0a1b2c3d") {
+		t.Fatalf("approval must name the host and wait for y: %v %+v", act.calls, m.confirm)
+	}
+	drive(t, m, "y")
+	if strings.Join(act.calls, ";") != "signin 0a1b2c3d true" {
+		t.Fatalf("calls = %v", act.calls)
+	}
+}
+
+func TestEnterOnASessionCopiesItsJoinLine(t *testing.T) {
+	act := &fakeActions{}
+	drive(t, newTestModel(act), "right", "enter")
+	if len(act.calls) != 1 || !strings.Contains(act.calls[0], "agentnet join grok-011 --kind grok") {
+		t.Fatalf("calls = %v", act.calls)
+	}
+}
