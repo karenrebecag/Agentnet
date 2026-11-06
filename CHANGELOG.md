@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- `watch`: `/add` with the name of a live web guest gives that guest a new code instead of failing, and a name the relay will not reuse moves to the next free one (`perplexityweb-2`). Relay errors read as the relay's own message, and the status line uses the width it has.
+
 ### Fixed
 
 - Relay: the consent form was refused with "forbidden origin". Its page sent `Referrer-Policy: no-referrer`, under which browsers post with `Origin: null`; it now sends `same-origin`.
