@@ -32,6 +32,7 @@ const (
 var (
 	ErrInvalidName = errors.New("invalid agent name")
 	ErrEmptyText   = errors.New("empty message")
+	ErrMissingID   = errors.New("missing message id")
 	ErrTooLarge    = fmt.Errorf("message larger than %d bytes", MaxTextBytes)
 
 	nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -139,24 +140,64 @@ func (s Store) SendWith(to, from, text string, opts SendOptions) (Envelope, erro
 	}
 	env := Envelope{ID: id, TS: time.Now().UTC().Format(time.RFC3339Nano), From: from, To: to, Text: text,
 		Origin: opts.Origin, ReplyTo: opts.ReplyTo}
+	return env, s.appendLine(to, env)
+}
+
+// Append writes an envelope that already has an id. Send mints a fresh id, so
+// relay delivery cannot use it: the local agent has to see the relay's id.
+// inbox is the local agent. env.To may be the global address and is stored as given.
+func (s Store) Append(inbox string, env Envelope) error {
+	if err := ValidateName(inbox); err != nil {
+		return err
+	}
+	if env.ID == "" || len(env.ID) > 128 || strings.ContainsAny(env.ID, " \t\r\n") {
+		return ErrMissingID
+	}
+	// A relay address is "<node>.<agent>" and can be longer than a local name.
+	if err := validateWireName(env.From); err != nil {
+		return err
+	}
+	if err := validateWireName(env.To); err != nil {
+		return err
+	}
+	env.Text = strings.TrimSpace(env.Text)
+	if env.Text == "" {
+		return ErrEmptyText
+	}
+	if len(env.Text) > MaxTextBytes {
+		return ErrTooLarge
+	}
+	if env.TS == "" {
+		env.TS = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	return s.appendLine(inbox, env)
+}
+
+func validateWireName(name string) error {
+	if name == "" || len(name) > 128 || strings.ContainsAny(name, "\r\n") {
+		return fmt.Errorf("%w: %q", ErrInvalidName, name)
+	}
+	return nil
+}
+
+func (s Store) appendLine(name string, env Envelope) error {
 	line, err := json.Marshal(env)
 	if err != nil {
-		return Envelope{}, err
+		return err
 	}
-	path, err := s.inboxPath(to)
+	path, err := s.inboxPath(name)
 	if err != nil {
-		return Envelope{}, err
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
-		return Envelope{}, err
+		return err
 	}
 	defer f.Close()
-	err = withLock(f, func() error {
+	return withLock(f, func() error {
 		_, werr := f.Write(append(line, '\n'))
 		return werr
 	})
-	return env, err
 }
 
 // Batch is a set of unread messages plus the offset that marks them read.

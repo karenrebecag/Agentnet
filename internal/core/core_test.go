@@ -136,6 +136,21 @@ func TestPathLikeNamesAreRejected(t *testing.T) {
 	}
 }
 
+func TestAppendKeepsTheGivenID(t *testing.T) {
+	s := newStore(t)
+	env := Envelope{ID: "0123456789abcdef0123456789abcdef", From: "desktop.other", To: "laptop.claude", Text: "ping", Origin: "relay"}
+	if err := s.Append("claude", env); err != nil {
+		t.Fatal(err)
+	}
+	got := drain(t, s, "claude")
+	if len(got) != 1 || got[0].ID != env.ID || got[0].From != env.From || got[0].Text != "ping" {
+		t.Fatalf("append = %+v", got)
+	}
+	if err := s.Append("claude", Envelope{From: "desktop.other", To: "laptop.claude", Text: "x"}); !errors.Is(err, ErrMissingID) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestOversizedMessageIsRejected(t *testing.T) {
 	s := newStore(t)
 	if _, err := s.Send("bob", "alice", strings.Repeat("z", MaxTextBytes+1)); !errors.Is(err, ErrTooLarge) {

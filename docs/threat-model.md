@@ -22,6 +22,16 @@ El host de la petición tiene que ser el de esa sesión. Cualquier otro se recha
 
 Cinco autenticaciones fallidas desde la misma dirección la bloquean 15 minutos. Cada 20 fallos se avisa al host. Esos fallos no apagan la sesión: si la apagaran, cualquiera podría tumbarla. La auth es Bearer. El archivo guarda el hash del token, no el token.
 
+## Relay
+
+`agentnet link` solo arranca cuando la persona lo ejecuta. La conexión sale de la máquina; la máquina no abre un puerto. Sin ese proceso la red local sigue igual.
+
+El token del nodo está en `relay.json` (0600). El token de admin está en `relay-admin.json` (0600). `link` no lee el archivo de admin, así que un proceso de link comprometido no administra nodos. Ninguno de los dos clientes sigue redirecciones: un 302 del mismo host reenvía el bearer de https a http. Una URL http que no sea loopback se rechaza.
+
+`origin: external` sigue siendo datos de un tercero. `origin: relay` viene de otra máquina de la misma persona y tampoco es una instrucción suya.
+
+El repositorio no lleva el id de una cuenta de Cloudflare.
+
 ## Abierto
 
 Los cupos no sobreviven un reinicio si nadie llama `Restore`. Windows no tiene este lock.
