@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-06
+
 ### Fixed
 
 - `watch` no longer captures the mouse, so text on screen can be selected and copied as in any terminal. On the code screen, `c` copies the code and `u` the connector URL.
