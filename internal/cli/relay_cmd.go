@@ -60,11 +60,13 @@ func (e env) relayAdminToken(args []string) (int, error) {
 
 func (e env) relayNode(args []string) (int, error) {
 	if len(args) == 0 {
-		return ExitError, fmt.Errorf("relay node needs add, list, rotate or revoke")
+		return ExitError, fmt.Errorf("relay node needs add, list, pair, rotate or revoke")
 	}
 	switch args[0] {
 	case "add":
 		return e.relayNodeAdd(args[1:])
+	case "pair":
+		return e.relayNodePair(args[1:])
 	case "list":
 		return e.relayNodeList(args[1:])
 	case "rotate":
@@ -81,6 +83,7 @@ func (e env) relayNodeAdd(args []string) (int, error) {
 	fs.SetOutput(e.stderr)
 	kind := fs.String("kind", "", "machine or guest")
 	targets := fs.String("targets", "", "comma-separated addresses a guest may ask")
+	inbox := fs.Bool("inbox", false, "guest accepts text from its targets without an ask")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return ExitError, err
@@ -97,7 +100,7 @@ func (e env) relayNodeAdd(args []string) (int, error) {
 			}
 		}
 	}
-	tok, saved, err := relay.AddNode(context.Background(), e.store.Home, pos[0], *kind, list)
+	tok, saved, err := relay.AddNodeOpts(context.Background(), e.store.Home, pos[0], *kind, list, *inbox)
 	if tok != "" {
 		fmt.Fprintln(e.stdout, tok)
 	}
@@ -106,6 +109,35 @@ func (e env) relayNodeAdd(args []string) (int, error) {
 	}
 	if saved {
 		fmt.Fprintf(e.stdout, "saved %s\n", pos[0])
+	}
+	return ExitOK, nil
+}
+
+func (e env) relayNodePair(args []string) (int, error) {
+	fs := flag.NewFlagSet("relay node pair", flag.ContinueOnError)
+	fs.SetOutput(e.stderr)
+	host := fs.String("for", "", "hostname this pairing code is bound to")
+	pos, err := parse(fs, args)
+	if err != nil {
+		return ExitError, err
+	}
+	if len(pos) != 1 {
+		return ExitError, fmt.Errorf("relay node pair needs a guest name")
+	}
+	if *host == "" {
+		return ExitError, fmt.Errorf("relay node pair needs --for")
+	}
+	p, err := relay.PairNode(context.Background(), e.store.Home, pos[0], *host)
+	if err != nil {
+		return ExitError, err
+	}
+	// The code is a one-time secret. Stdout is the only copy.
+	fmt.Fprintln(e.stdout, p.Code)
+	if p.ConnectorURL != "" {
+		fmt.Fprintln(e.stdout, p.ConnectorURL)
+	}
+	if p.Expires != "" {
+		fmt.Fprintln(e.stdout, p.Expires)
 	}
 	return ExitOK, nil
 }

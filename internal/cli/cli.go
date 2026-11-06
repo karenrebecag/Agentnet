@@ -47,7 +47,7 @@ const (
   link                              relay session (reads relay.json, never the admin token)
   relay init --url https://...     save the relay url
   relay admin-token                 write an admin token and print it once
-  relay node add|list|rotate|revoke manage relay nodes
+  relay node add|list|pair|rotate|revoke manage relay nodes
 
 AGENTNET_NAME sets the default name, AGENTNET_HOME the data directory.
 Exit codes: 0 ok, 1 error, 2 recipient offline (queued), 3 name already live.

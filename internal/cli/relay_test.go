@@ -4,7 +4,11 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -61,6 +65,123 @@ func TestSendToOfflineLocalStillSaysOffline(t *testing.T) {
 	if !strings.Contains(stderr.String(), "offline, delivered on next join/read") {
 		t.Fatalf("stderr %s", stderr.String())
 	}
+}
+
+func TestPairPrintsCodeOnce(t *testing.T) {
+	const code = "K7NP-4QDM"
+	var gotFor string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			For string `json:"for"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		gotFor = body.For
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"code": code, "expires": "2026-11-06T18:10:00Z", "connector_url": "https://relay.example.test/mcp",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	home := t.TempDir()
+	t.Setenv("AGENTNET_HOME", home)
+	writeRelayAdmin(t, home, srv.URL)
+	var stdout, stderr bytes.Buffer
+	codeExit := Run([]string{"relay", "node", "pair", "web", "--for", "Claude.AI."}, strings.NewReader(""), &stdout, &stderr)
+	if codeExit != ExitOK {
+		t.Fatalf("code %d %s", codeExit, stderr.String())
+	}
+	if gotFor != "claude.ai" || strings.Count(stdout.String(), code) != 1 || strings.Contains(stderr.String(), code) {
+		t.Fatalf("for %q stdout %q stderr %q", gotFor, stdout.String(), stderr.String())
+	}
+	if dirHasCLI(t, home, code) {
+		t.Fatal("code on disk")
+	}
+}
+
+func TestNodeAddInboxFlag(t *testing.T) {
+	var posts int
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		json.NewEncoder(w).Encode(map[string]string{"token": "an_issued"})
+	}))
+	t.Cleanup(srv.Close)
+	home := t.TempDir()
+	t.Setenv("AGENTNET_HOME", home)
+	writeRelayAdmin(t, home, srv.URL)
+
+	var stderr bytes.Buffer
+	if code := Run([]string{"relay", "node", "add", "laptop", "--kind", "machine", "--inbox"}, strings.NewReader(""), &bytes.Buffer{}, &stderr); code == 0 || posts != 0 {
+		t.Fatalf("machine code %d posts %d %s", code, posts, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--inbox") {
+		t.Fatalf("stderr %s", stderr.String())
+	}
+	if code := Run([]string{"relay", "node", "add", "web", "--kind", "guest", "--targets", "mac.claude", "--inbox"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); code != 0 || posts != 1 {
+		t.Fatalf("guest inbox code %d posts %d", code, posts)
+	}
+	if bodies[0]["inbox"] != true {
+		t.Fatalf("body %+v", bodies[0])
+	}
+	if code := Run([]string{"relay", "node", "add", "web", "--kind", "guest", "--targets", "mac.claude"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); code != 0 || posts != 2 {
+		t.Fatalf("guest code %d posts %d", code, posts)
+	}
+	if _, ok := bodies[1]["inbox"]; ok {
+		t.Fatalf("inbox key present %+v", bodies[1])
+	}
+}
+
+func TestPairBadHostDoesNotPost(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		http.Error(w, "no", http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+	home := t.TempDir()
+	t.Setenv("AGENTNET_HOME", home)
+	writeRelayAdmin(t, home, srv.URL)
+	var stderr bytes.Buffer
+	code := Run([]string{"relay", "node", "pair", "web", "--for", "https://claude.ai"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	if code == 0 || posts != 0 || strings.Contains(stderr.String(), "K7NP") {
+		t.Fatalf("code %d posts %d %s", code, posts, stderr.String())
+	}
+}
+
+func writeRelayAdmin(t *testing.T, home, rawURL string) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{"url": rawURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "relay.json"), append(raw, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "relay-admin.json"), []byte("{\"token\":\"admin-secret\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dirHasCLI(t *testing.T, root, needle string) bool {
+	t.Helper()
+	found := false
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if strings.Contains(string(b), needle) {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 func TestLinkWithoutConfigFails(t *testing.T) {
