@@ -211,6 +211,12 @@ func (s *session) onDeliver(ctx context.Context, in incoming) error {
 		return errors.New("bad deliver")
 	}
 	seq := *in.Seq
+	// The relay flushes the same unacked seq again when hello arrives. A seq
+	// we already acked is a replay, not a gap. Acking it again is a no-op once
+	// the relay has recorded the first ack, and repairs a lost one.
+	if s.have && seq < s.next {
+		return s.ack(ctx, seq)
+	}
 	if s.have && seq != s.next {
 		return errGap
 	}

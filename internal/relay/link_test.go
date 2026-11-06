@@ -72,6 +72,62 @@ func TestGapDoesNotAckOrWrite(t *testing.T) {
 	}
 }
 
+func TestReplayOfAckedSeqIsAckedAgain(t *testing.T) {
+	conn := &scriptConn{in: [][]byte{
+		mustJSON(t, map[string]any{"type": "welcome", "node": "laptop"}),
+		mustJSON(t, map[string]any{"type": "deliver", "seq": 4, "envelope": map[string]any{
+			"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "from": "desktop.other", "to": "laptop.claude", "text": "one", "origin": "relay",
+		}}),
+		mustJSON(t, map[string]any{"type": "deliver", "seq": 4, "envelope": map[string]any{
+			"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "from": "desktop.other", "to": "laptop.claude", "text": "one", "origin": "relay",
+		}}),
+		mustJSON(t, map[string]any{"type": "deliver", "seq": 9, "envelope": map[string]any{
+			"id": "cccccccccccccccccccccccccccccccc", "from": "desktop.other", "to": "laptop.claude", "text": "gap", "origin": "relay",
+		}}),
+	}}
+	n := 0
+	store := core.Store{Home: t.TempDir()}
+	err := Run(context.Background(), Options{
+		Store: store,
+		File:  File{URL: "http://example.test", Node: "laptop", Token: "an_secret"},
+		Poll:  time.Hour,
+		Sleep: func(context.Context, time.Duration) error { return nil },
+		Dial: func(context.Context, string, string) (Conn, error) {
+			n++
+			if n == 1 {
+				return conn, nil
+			}
+			return nil, errRevoked
+		},
+	})
+	if !errors.Is(err, errRevoked) {
+		t.Fatalf("err = %v", err)
+	}
+	var acked []int64
+	for _, raw := range conn.out {
+		var f struct {
+			Type string `json:"type"`
+			Seq  int64  `json:"seq"`
+		}
+		if json.Unmarshal(raw, &f) != nil {
+			t.Fatalf("frame %s", raw)
+		}
+		if f.Type == "ack" {
+			acked = append(acked, f.Seq)
+		}
+	}
+	if len(acked) != 2 || acked[0] != 4 || acked[1] != 4 {
+		t.Fatalf("acks = %v", acked)
+	}
+	batch, err := store.Peek("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Messages) != 1 || batch.Messages[0].Text != "one" {
+		t.Fatalf("inbox %+v", batch.Messages)
+	}
+}
+
 func TestLinkDeliverDedupesAndLeavesAdminAlone(t *testing.T) {
 	const token = "an_secret"
 	const relayID = "0123456789abcdef0123456789abcdef"
