@@ -272,3 +272,13 @@ func TestAKnownCommandWithoutItsArgumentSaysHowToCallIt(t *testing.T) {
 		t.Fatalf("status = %q", m.status)
 	}
 }
+
+func TestTheCodeScreenCopiesCodeAndURL(t *testing.T) {
+	act := &fakeActions{}
+	m := newTestModel(act)
+	m.secret = pairingNote("perplexityweb", relay.Pairing{Code: "SYWC-T2F2", ConnectorURL: "https://relay.example/mcp"})
+	drive(t, m, "c", "u")
+	if strings.Join(act.calls, ";") != "copy SYWC-T2F2;copy https://relay.example/mcp" {
+		t.Fatalf("calls = %v", act.calls)
+	}
+}

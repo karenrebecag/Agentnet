@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- `watch` no longer captures the mouse, so text on screen can be selected and copied as in any terminal. On the code screen, `c` copies the code and `u` the connector URL.
+
 ### Changed
 
 - `watch`: `/add` with the name of a live web guest gives that guest a new code instead of failing, and a name the relay will not reuse moves to the next free one (`perplexityweb-2`). Relay errors read as the relay's own message, and the status line uses the width it has.
