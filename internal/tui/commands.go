@@ -140,6 +140,14 @@ func (m Model) command(line string) (tea.Cmd, *confirmation, error) {
 	case len(f) == 4 && f[0] == "revoke" && f[1] == "guest" && (f[2] == string(ViaRelay) || f[2] == string(ViaExpose)):
 		return nil, m.guestAction("Revoke", GuestRow{Name: f[3], Via: Via(f[2])}), nil
 	}
+	// A known command with the wrong arguments says how to call it.
+	if len(f) > 0 {
+		for _, s := range commandSpecs {
+			if s.Name == f[0] {
+				return nil, nil, fmt.Errorf("usage: /%s %s", s.Name, s.Usage)
+			}
+		}
+	}
 	return nil, nil, errUsage
 }
 

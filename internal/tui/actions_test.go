@@ -264,3 +264,11 @@ func TestAddWithAnExistingNameReconnectsOrRenames(t *testing.T) {
 		t.Fatalf("a taken name must move to the next free one: %+v", m.wizard)
 	}
 }
+
+func TestAKnownCommandWithoutItsArgumentSaysHowToCallIt(t *testing.T) {
+	m := drive(t, newTestModel(&fakeActions{}), "/")
+	m = drive(t, m, append(splitKeys("pair"), "enter")...)
+	if m.status != "usage: /pair <guest>" {
+		t.Fatalf("status = %q", m.status)
+	}
+}
