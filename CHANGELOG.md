@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Relay: the consent form was refused with "forbidden origin". Its page sent `Referrer-Policy: no-referrer`, under which browsers post with `Origin: null`; it now sends `same-origin`.
+
+### Changed
+
+- Relay: the sign-in pages follow Arc's sign-in card and OTP input, with one slot per character of the code and paste across slots. The one script is inline and allowed by hash; the form works without it.
+- `watch`: a client waiting for approval opens the approval prompt at once, and the code screen of that guest closes since its code is spent.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

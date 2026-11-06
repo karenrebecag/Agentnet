@@ -17,7 +17,11 @@ import (
 
 const fakeToken = "an_SECRET_TOKEN_VALUE"
 
-type fakeActions struct{ calls []string }
+// waiting makes the relay report one client waiting for approval.
+type fakeActions struct {
+	calls   []string
+	waiting bool
+}
 
 func (f *fakeActions) Nodes(context.Context) ([]relay.Node, error) {
 	return []relay.Node{{Name: "mac", Kind: "machine", Agents: []relay.NodeAgent{{Name: "claude"}, {Name: "grok"}}}, {Name: "pc", Kind: "machine", Agents: []relay.NodeAgent{{Name: "codex"}}}, {Name: "perplexity", Kind: "guest", Targets: []string{"mac.claude"}}}, nil
@@ -63,6 +67,9 @@ func (f *fakeActions) PairGuest(_ context.Context, n string) (relay.Pairing, err
 	return relay.Pairing{Code: "ABCD-EFGH"}, nil
 }
 func (f *fakeActions) Signins(context.Context) ([]relay.Signin, error) {
+	if !f.waiting {
+		return nil, nil
+	}
 	return []relay.Signin{{ID: "0a1b2c3d", Guest: "claude-web", Host: "claude.ai", ClientName: "Claude"}}, nil
 }
 func (f *fakeActions) DecideSignin(_ context.Context, id string, approve bool) error {
@@ -150,8 +157,8 @@ func TestRevokeWaitsForConfirmation(t *testing.T) {
 
 func TestGuestActionsReachTheStoreTheRowCameFrom(t *testing.T) {
 	act := &fakeActions{}
-	// Same name in both stores: after the waiting sign-in, relay first, then expose.
-	m := drive(t, newTestModel(act), "right", "right", "down")
+	// Same name in both stores: rows sort relay first, then expose.
+	m := drive(t, newTestModel(act), "right", "right")
 	m = drive(t, m, "a")
 	if m.confirm != nil || len(act.calls) != 0 {
 		t.Fatal("a relay guest has no approve step")
@@ -209,14 +216,27 @@ func TestAddAsksNameThenAgentsAndShowsTheCode(t *testing.T) {
 }
 
 func TestSigninWaitsForConfirmation(t *testing.T) {
-	act := &fakeActions{}
-	m := drive(t, newTestModel(act), "right", "right", "a")
+	act := &fakeActions{waiting: true}
+	m := settle(newTestModel(act), scanSignins(act))
 	if len(act.calls) != 0 || m.confirm == nil || !strings.Contains(m.confirm.prompt, "claude.ai") || !strings.Contains(m.confirm.prompt, "0a1b2c3d") {
 		t.Fatalf("approval must name the host and wait for y: %v %+v", act.calls, m.confirm)
 	}
 	drive(t, m, "y")
 	if strings.Join(act.calls, ";") != "signin 0a1b2c3d true" {
 		t.Fatalf("calls = %v", act.calls)
+	}
+}
+
+func TestANewSigninAsksForApprovalAtOnce(t *testing.T) {
+	act := &fakeActions{waiting: true}
+	m := newTestModel(act)
+	m.secret = &secretNote{title: "Connect a web AI as claude-web", token: "ABCD-EFGH"}
+	m = settle(m, scanSignins(act))
+	if m.secret != nil || m.confirm == nil || m.tab != tabGuests || !strings.Contains(m.confirm.prompt, "claude.ai") {
+		t.Fatalf("a used code's screen must give way to the approval: secret=%v confirm=%v tab=%v", m.secret, m.confirm, m.tab)
+	}
+	if len(act.calls) != 0 {
+		t.Fatalf("approval needs y: %v", act.calls)
 	}
 }
 

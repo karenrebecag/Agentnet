@@ -1,5 +1,5 @@
 import type { ClientRecord } from "./directory";
-import { consentPage, errorPage, waitingPage } from "./consent";
+import { consentPage, errorPage, typedCode, waitingPage } from "./consent";
 import { type Env, json } from "./shared";
 
 // The relay is its own OAuth 2.1 authorization server for guests that sign in
@@ -236,7 +236,7 @@ export async function authorizePost(request: Request, env: Env): Promise<Respons
     return Response.redirect(back.toString(), 303);
   }
   const before = await directory.peekRequest(id);
-  const result = await directory.approve(id, String(form.get("code") ?? "").slice(0, 32), clientIp(request));
+  const result = await directory.approve(id, typedCode(form), clientIp(request));
   if ("redirect" in result) return Response.redirect(result.redirect, 303);
   if ("waiting" in result) return pollWaiting(env, result.waiting);
   if ("retry" in result && before) {
