@@ -1,5 +1,5 @@
 import { route } from "./route";
-import { type Env, type NodeRecord, GUEST_AGENT, json, randomHex, splitAddress } from "./shared";
+import { type Env, type Envelope, type NodeRecord, GUEST_AGENT, json, randomHex, splitAddress } from "./shared";
 
 // A minimal, stateless Streamable HTTP MCP server with JSON responses. It is
 // small enough to audit in one sitting, which matters more here than features.
@@ -48,6 +48,36 @@ const TOOLS = [
     },
   },
 ];
+
+const INBOX_BATCH = 20;
+
+// Only for a guest created with inbox on: messages its agents sent without
+// being asked. MCP gives a web client no way to be woken up, so it has to look.
+const INBOX_TOOLS = [
+  {
+    name: "inbox",
+    description: "Read and clear messages your agents sent you without being asked.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "wait",
+    description:
+      "Wait up to wait_seconds (max 50) for the next unsolicited message from your agents. Call it again to keep listening.",
+    inputSchema: {
+      type: "object",
+      properties: { wait_seconds: { type: "integer", minimum: 0, maximum: MAX_WAIT } },
+      additionalProperties: false,
+    },
+  },
+];
+
+function toolsFor(guest: NodeRecord) {
+  return guest.inbox ? [...TOOLS, ...INBOX_TOOLS] : TOOLS;
+}
+
+function messages(list: Envelope[]) {
+  return list.map((e) => ({ id: e.id, from: e.from, ts: e.ts, text: e.text }));
+}
 
 function waitMs(value: unknown): number {
   const seconds = typeof value === "number" && Number.isFinite(value) ? value : DEFAULT_WAIT;
@@ -101,6 +131,12 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
         if (reply) return toolResult({ id: args.id, status: "answered", reply: reply.text, from: reply.from });
         return toolResult({ id: args.id, status: "waiting" });
       }
+      case "inbox":
+        if (!guest.inbox) return null;
+        return toolResult({ messages: messages(await box.takeInbox(INBOX_BATCH)) });
+      case "wait":
+        if (!guest.inbox) return null;
+        return toolResult({ messages: messages(await box.waitInbox(waitMs(args.wait_seconds), INBOX_BATCH)) });
       default:
         return null;
     }
@@ -149,7 +185,7 @@ export async function handleMcp(request: Request, env: Env, guest: NodeRecord): 
     case "ping":
       return json({ jsonrpc: "2.0", id, result: {} });
     case "tools/list":
-      return json({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
+      return json({ jsonrpc: "2.0", id, result: { tools: toolsFor(guest) } });
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
       const args = typeof params.arguments === "object" && params.arguments !== null ? (params.arguments as Record<string, unknown>) : {};

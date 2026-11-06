@@ -183,6 +183,29 @@ export class Mailbox extends DurableObject<Env> {
     return { status: sockets.length > 0 ? "delivered" : "queued", id: envelope.id };
   }
 
+  /** Guest side: an unsolicited message from one of the guest's targets. */
+  async enqueueInbox(envelope: Envelope): Promise<SendResult> {
+    if (!this.take(`inbox:${envelope.from}`, 10, 200)) return { status: "rejected", error: "rate limit for this guest" };
+    return this.enqueue(envelope);
+  }
+
+  /** Hands out unsolicited messages and forgets them: a guest has no cursor to ack. */
+  async takeInbox(max: number): Promise<Envelope[]> {
+    const rows = this.sql.exec<{ seq: number; env: string }>(
+      "SELECT seq, env FROM queue WHERE reply_to IS NULL ORDER BY seq LIMIT ?", max).toArray();
+    for (const r of rows) this.sql.exec("DELETE FROM queue WHERE seq = ?", r.seq);
+    return rows.map((r) => JSON.parse(r.env));
+  }
+
+  async waitInbox(waitMs: number, max: number): Promise<Envelope[]> {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const got = await this.takeInbox(max);
+      if (got.length > 0 || Date.now() >= deadline) return got;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+  }
+
   async closeAll(): Promise<void> {
     for (const ws of this.ctx.getWebSockets()) ws.close(4001, "token rotated or revoked");
   }
