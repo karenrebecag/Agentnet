@@ -173,9 +173,7 @@ func checkNode(name, kind string, targets []string, inbox bool) error {
 			return errors.New("a machine node does not take --inbox")
 		}
 	case "guest":
-		if len(targets) == 0 {
-			return errors.New("a guest needs --targets")
-		}
+		// No targets makes an open guest: it may ask any agent the person allows.
 		for _, tgt := range targets {
 			if _, _, err := ParseAddress(tgt); err != nil {
 				return err
@@ -436,4 +434,52 @@ func DecideSignin(ctx context.Context, home, id string, approve bool) error {
 		verb = "approve"
 	}
 	return c.do(ctx, http.MethodPost, "/v1/admin/signins/"+id+"/"+verb, map[string]any{}, nil)
+}
+
+// Contact is an open guest's first message to an agent, waiting for a yes.
+type Contact struct {
+	ID      string `json:"id"`
+	Guest   string `json:"guest"`
+	Address string `json:"address"`
+	Created string `json:"created"`
+	Expires string `json:"expires"`
+}
+
+func ListContacts(ctx context.Context, home string) ([]Contact, error) {
+	c, _, err := adminClient(home)
+	if err != nil {
+		return nil, err
+	}
+	var out []Contact
+	err = c.do(ctx, http.MethodGet, "/v1/admin/contacts", nil, &out)
+	return out, err
+}
+
+// DecideContact allows or refuses a waiting contact. Allowing delivers the held message.
+func DecideContact(ctx context.Context, home, id string, approve bool) error {
+	if !signinRE.MatchString(id) {
+		return fmt.Errorf("contact id must be 8 hex characters, got %q", id)
+	}
+	c, _, err := adminClient(home)
+	if err != nil {
+		return err
+	}
+	verb := "deny"
+	if approve {
+		verb = "approve"
+	}
+	return c.do(ctx, http.MethodPost, "/v1/admin/contacts/"+id+"/"+verb, map[string]any{}, nil)
+}
+
+// GuestURL is the connector URL that carries the guest token. It is the
+// guest's password: shown once, never written to disk.
+func GuestURL(home, token string) (string, error) {
+	f, err := Load(home)
+	if err != nil {
+		return "", err
+	}
+	if err := checkRelayBase(f.URL); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(f.URL, "/") + "/mcp?key=" + url.QueryEscape(token), nil
 }

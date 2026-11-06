@@ -64,8 +64,8 @@ func TestAdminRoundTripAndLocalFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, _, err := AddNode(ctx, home, "phone", "guest", nil); err == nil {
-		t.Fatal("guest without targets")
+	if _, _, err := AddNode(ctx, home, "phone", "guest", []string{"not-an-address"}); err == nil {
+		t.Fatal("guest with a malformed target")
 	}
 	if posts != 0 {
 		t.Fatal("guest check hit the relay")
@@ -259,9 +259,6 @@ func TestAddNodeOptsInbox(t *testing.T) {
 	ctx := context.Background()
 	if _, _, err := AddNodeOpts(ctx, home, "laptop", "machine", nil, true); err == nil || posts != 0 {
 		t.Fatalf("machine inbox posts=%d err=%v", posts, err)
-	}
-	if _, _, err := AddNodeOpts(ctx, home, "web", "guest", nil, true); err == nil || posts != 0 {
-		t.Fatalf("guest without targets posts=%d err=%v", posts, err)
 	}
 	if _, _, err := AddNodeOpts(ctx, home, "web", "guest", []string{"mac.claude"}, true); err != nil {
 		t.Fatal(err)

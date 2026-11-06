@@ -1,4 +1,4 @@
-import { route } from "./route";
+import { isOpen, route } from "./route";
 import { type Env, type Envelope, type NodeRecord, GUEST_AGENT, json, randomHex, splitAddress } from "./shared";
 
 // A minimal, stateless Streamable HTTP MCP server with JSON responses. It is
@@ -21,7 +21,7 @@ interface RpcRequest {
 const TOOLS = [
   {
     name: "list_agents",
-    description: "List the agents you may ask.",
+    description: "List the agents you may ask. An agent with allowed false can still be asked: the first message waits until the person allows it.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -98,6 +98,7 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
   try {
     switch (name) {
       case "list_agents": {
+        if (isOpen(guest)) return toolResult({ agents: await everyAgent(env, guest) });
         const agents = [];
         for (const address of guest.targets) {
           const dest = splitAddress(address);
@@ -122,6 +123,12 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
           await box.forgetAsk(askId);
           return toolResult(sent.error, true);
         }
+        if (sent.status === "awaiting_approval") {
+          return toolResult({
+            id: sent.id, status: "awaiting_approval",
+            note: `The person must allow this contact on their computer (request ${sent.contact}). Your message is held and delivered once allowed; call get_reply with this id to wait for the answer.`,
+          });
+        }
         const reply = await box.waitReply(sent.id, waitMs(args.wait_seconds));
         if (reply) return toolResult({ id: sent.id, status: "answered", reply: reply.text, from: reply.from });
         return toolResult({ id: sent.id, status: sent.status === "delivered" ? "waiting" : "queued" });
@@ -145,6 +152,22 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
   } finally {
     await box.leave(lease);
   }
+}
+
+// Every agent online on every machine, for a guest that may ask any of them.
+async function everyAgent(env: Env, guest: NodeRecord) {
+  const directory = env.DIRECTORY.getByName("directory");
+  const out = [];
+  for (const node of await directory.list()) {
+    if (node.kind !== "machine" || node.revoked || node.agents.length === 0) continue;
+    if (!(await env.MAILBOX.getByName(node.name).isOnline())) continue;
+    for (const a of node.agents) {
+      const address = `${node.name}.${a.name}`;
+      const allowed = a.session ? await directory.contactAllowed(guest.name, address, a.session) : false;
+      out.push({ name: address, kind: a.kind, live: true, allowed });
+    }
+  }
+  return out;
 }
 
 function rpcError(id: RpcRequest["id"], code: number, message: string) {

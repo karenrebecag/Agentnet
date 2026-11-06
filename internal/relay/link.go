@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -42,6 +43,9 @@ type announced struct {
 	Name           string `json:"name"`
 	Kind           string `json:"kind"`
 	AcceptExternal bool   `json:"accept_external"`
+	// Session changes with every join, so the relay can tie an approval to
+	// one process instead of to a name the next process may reuse.
+	Session string `json:"session,omitempty"`
 }
 
 type incoming struct {
@@ -399,7 +403,7 @@ func (s *session) live() []announced {
 		if _, _, ok := splitNode(a.Name); ok {
 			continue
 		}
-		out = append(out, announced{Name: a.Name, Kind: a.Kind, AcceptExternal: a.AcceptExternal})
+		out = append(out, announced{Name: a.Name, Kind: a.Kind, AcceptExternal: a.AcceptExternal, Session: sessionOf(a.Agent)})
 	}
 	return out
 }
@@ -565,4 +569,8 @@ func checkRelayBase(raw string) error {
 
 func refuseRedirect(*http.Request, []*http.Request) error {
 	return errRedirect
+}
+
+func sessionOf(a core.Agent) string {
+	return fmt.Sprintf("%d-%s", a.PID, strings.NewReplacer(":", "", "+", "").Replace(a.Joined))
 }

@@ -8,6 +8,9 @@ import {
   MAX_REGISTRATIONS_PER_IP,
   MAX_REQUESTS,
   MAX_SIGNINS,
+  CONTACT_TTL_MS,
+  MAX_CONTACTS,
+  MAX_CONTACTS_PER_GUEST,
   PAIR_FAILURE_LIMIT,
   PAIR_TTL_MS,
   REQUEST_TTL_MS,
@@ -65,6 +68,18 @@ export interface Signin {
   created: string;
   expires: string;
 }
+
+/** An open guest waiting to talk to an agent for the first time. */
+export interface Contact {
+  id: string;
+  guest: string;
+  address: string;
+  created: string;
+  expires: string;
+}
+
+// An approval lasts as long as the agent's session; this only bounds the row.
+const CONTACT_KEPT_MS = 30 * 86_400_000;
 
 type SigninRow = AuthRequest & { id: string; guest: string; client_name: string; host: string; ip: string; status: string; created: number; expires: number };
 
@@ -149,7 +164,6 @@ export class Directory extends DurableObject<Env> {
   async create(name: string, kind: NodeKind, targets: string[], inbox = false): Promise<{ token: string } | { error: string }> {
     if (!NODE_RE.test(name) || RESERVED_NODES.has(name)) return { error: "invalid or reserved node name" };
     if (kind !== "machine" && kind !== "guest") return { error: "kind must be machine or guest" };
-    if (kind === "guest" && targets.length === 0) return { error: "a guest needs at least one target" };
     if (kind === "machine" && targets.length > 0) return { error: "only guests have targets" };
     if (kind === "machine" && inbox) return { error: "only guests have an inbox" };
     for (const target of targets) {
@@ -198,12 +212,68 @@ export class Directory extends DurableObject<Env> {
   async pair(name: string, host: string): Promise<{ code: string; expires: string } | { error: string }> {
     const row = this.row(name);
     if (!row || row.revoked || row.kind !== "guest") return { error: "unknown, revoked or not a guest" };
-    if (JSON.parse(row.targets).length === 0) return { error: "the guest has no targets" };
     const code = newPairCode();
     const expires = Date.now() + PAIR_TTL_MS;
     this.sql.exec("INSERT INTO pairings (hash, guest, host, expires) VALUES (?, ?, ?, ?)", await sha256Hex(normalizePairCode(code)), name, host, expires);
     await this.schedule();
     return { code, expires: new Date(expires).toISOString() };
+  }
+
+  // ---- open guests: contacts ----
+
+  /** Whether the person allowed this guest to talk to this agent session. */
+  async contactAllowed(guest: string, address: string, session: string): Promise<boolean> {
+    return this.sql.exec("SELECT 1 FROM contacts WHERE guest = ? AND address = ? AND session = ? AND status = 'approved' AND expires > ?",
+      guest, address, session, Date.now()).toArray().length > 0;
+  }
+
+  /** Holds the first message until the person answers. One pending request per pair. */
+  async requestContact(guest: string, address: string, session: string, envelope: string): Promise<{ id: string } | { error: string }> {
+    const t = Date.now();
+    const pending = this.sql.exec<{ id: string }>(
+      "SELECT id FROM contacts WHERE guest = ? AND address = ? AND session = ? AND status = 'waiting' AND expires > ?",
+      guest, address, session, t).toArray()[0];
+    if (pending) return { error: `still waiting for approval (${pending.id}); try again after it is allowed` };
+    const refused = this.sql.exec("SELECT 1 FROM contacts WHERE guest = ? AND address = ? AND session = ? AND status = 'denied' AND expires > ?",
+      guest, address, session, t).toArray().length > 0;
+    if (refused) return { error: "the person refused this contact recently; try again later" };
+    const mine = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM contacts WHERE guest = ? AND status = 'waiting' AND expires > ?", guest, t).toArray()[0].n;
+    if (mine >= MAX_CONTACTS_PER_GUEST) return { error: "too many contacts waiting for approval" };
+    const all = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM contacts WHERE status = 'waiting'").toArray()[0].n;
+    if (all >= MAX_CONTACTS) return { error: "too many contacts waiting for approval" };
+    const id = newId().slice(0, 8);
+    this.sql.exec("INSERT INTO contacts (id, guest, address, session, status, envelope, created, expires) VALUES (?, ?, ?, ?, 'waiting', ?, ?, ?)",
+      id, guest, address, session, envelope, t, t + CONTACT_TTL_MS);
+    await this.schedule();
+    return { id };
+  }
+
+  async listContacts(): Promise<Contact[]> {
+    return this.sql.exec<{ id: string; guest: string; address: string; created: number; expires: number }>(
+      "SELECT id, guest, address, created, expires FROM contacts WHERE status = 'waiting' AND expires > ? ORDER BY created", Date.now())
+      .toArray().map((r) => ({ id: r.id, guest: r.guest, address: r.address, created: new Date(r.created).toISOString(), expires: new Date(r.expires).toISOString() }));
+  }
+
+  /**
+   * Answers a request and hands back the held message. An approval only holds
+   * if the agent still runs the session it was asked for: a process that took
+   * the name while the request waited gets nothing.
+   */
+  async decideContact(id: string, approve: boolean): Promise<{ envelope: string; address: string; deliver: boolean } | null> {
+    const t = Date.now();
+    const row = this.sql.exec<{ envelope: string; address: string; session: string }>(
+      "SELECT envelope, address, session FROM contacts WHERE id = ? AND status = 'waiting' AND expires > ?", id, t).toArray()[0];
+    if (!row) return null;
+    const dest = splitAddress(row.address);
+    const node = dest ? this.row(dest.node) : null;
+    const current = node && !node.revoked ? (JSON.parse(node.agents) as AgentInfo[]).find((a) => a.name === dest!.agent)?.session : undefined;
+    if (approve && current === row.session) {
+      this.sql.exec("UPDATE contacts SET status = 'approved', envelope = NULL, expires = ? WHERE id = ?", t + CONTACT_KEPT_MS, id);
+      return { envelope: row.envelope, address: row.address, deliver: true };
+    }
+    // A refusal is remembered for a while, so a leaked link cannot keep asking.
+    this.sql.exec("UPDATE contacts SET status = 'denied', envelope = NULL, expires = ? WHERE id = ?", t + CONTACT_TTL_MS, id);
+    return { envelope: row.envelope, address: row.address, deliver: false };
   }
 
   // ---- OAuth: clients ----

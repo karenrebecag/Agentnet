@@ -13,6 +13,9 @@ export interface AgentInfo {
   name: string;
   kind: string;
   accept_external: boolean;
+  // Changes every time the agent joins again, so an approval given to one
+  // session does not carry over to the next process under the same name.
+  session?: string;
 }
 
 export interface Envelope {

@@ -155,7 +155,7 @@ func (m Model) tabs(width int) string {
 	parts := make([]string, tabCount)
 	for t := tabID(0); t < tabCount; t++ {
 		label := tabNames[t]
-		if waiting := len(m.snap.Pending) + len(m.signins); t == tabGuests && waiting > 0 {
+		if waiting := len(m.snap.Pending) + len(m.signins) + len(m.contacts); t == tabGuests && waiting > 0 {
 			label += fmt.Sprintf(" (%d waiting)", waiting)
 		}
 		if t == m.tab {

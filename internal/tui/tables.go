@@ -92,6 +92,9 @@ func (m Model) table(tab tabID) table {
 		for _, s := range m.signins {
 			t.add("signin/"+s.ID, c(s.Guest, name), c("sign-in", text), c("waiting "+s.ID, warn), c("from "+s.Host+" · says it is "+s.ClientName, warn))
 		}
+		for _, ct := range m.contacts {
+			t.add("contact/"+ct.ID, c(ct.Guest, name), c("contact", text), c("waiting "+ct.ID, warn), c("wants "+ct.Address, warn))
+		}
 		for _, g := range m.guests {
 			t.add(string(g.Via)+"/"+g.Name, c(g.Name, name), c(string(g.Via), text), c(g.State, guestStyle(g.State)), c(strings.Join(g.Targets, ", "), text))
 		}

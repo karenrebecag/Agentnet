@@ -58,9 +58,23 @@ func (f *fakeActions) RevokeExposeGuest(n string) error {
 	return nil
 }
 
-func (f *fakeActions) AddWebGuest(_ context.Context, n string, t []string) (relay.Pairing, error) {
-	f.calls = append(f.calls, "add-web-guest "+n+" "+strings.Join(t, ","))
-	return relay.Pairing{Code: "ABCD-EFGH", ConnectorURL: "https://relay.example/mcp"}, nil
+func (f *fakeActions) AddWebGuest(_ context.Context, n string) (string, error) {
+	f.calls = append(f.calls, "add-web-guest "+n)
+	return "https://relay.example/mcp?key=" + fakeToken, nil
+}
+func (f *fakeActions) NewGuestURL(_ context.Context, n string) (string, error) {
+	f.calls = append(f.calls, "new-link "+n)
+	return "https://relay.example/mcp?key=" + fakeToken, nil
+}
+func (f *fakeActions) Contacts(context.Context) ([]relay.Contact, error) {
+	if !f.waiting {
+		return nil, nil
+	}
+	return []relay.Contact{{ID: "c0ffee11", Guest: "perplexity", Address: "mac.orq"}}, nil
+}
+func (f *fakeActions) DecideContact(_ context.Context, id string, approve bool) error {
+	f.calls = append(f.calls, fmt.Sprintf("contact %s %t", id, approve))
+	return nil
 }
 func (f *fakeActions) PairGuest(_ context.Context, n string) (relay.Pairing, error) {
 	f.calls = append(f.calls, "pair "+n)
@@ -205,17 +219,31 @@ func TestInputIsNeverSentAsAMessage(t *testing.T) {
 
 func splitKeys(s string) []string { return strings.Split(s, "") }
 
-func TestAddAsksNameThenAgentsAndShowsTheCode(t *testing.T) {
+func TestAddAsksOnlyANameAndShowsTheLink(t *testing.T) {
 	act := &fakeActions{}
 	m := drive(t, newTestModel(act), "/")
 	m = drive(t, m, append(append(splitKeys("add"), "enter"), splitKeys("claude-web")...)...)
 	m = drive(t, m, "enter")
-	m = drive(t, m, append(splitKeys("mac.claude"), "enter")...)
-	if strings.Join(act.calls, ";") != "open claude;add-web-guest claude-web mac.claude" {
+	if strings.Join(act.calls, ";") != "add-web-guest claude-web" {
 		t.Fatalf("calls = %v", act.calls)
 	}
-	if m.secret == nil || m.secret.token != "ABCD-EFGH" || !strings.Contains(m.secret.hint, "https://relay.example/mcp") {
-		t.Fatalf("the code and connector URL must be shown: %+v", m.secret)
+	if m.secret == nil || m.secret.token != "https://relay.example/mcp?key="+fakeToken {
+		t.Fatalf("the link must be shown once: %+v", m.secret)
+	}
+	if strings.Contains(m.status, fakeToken) {
+		t.Fatal("the link must stay out of the status line")
+	}
+}
+
+func TestAFirstContactAsksBeforeAnythingIsDelivered(t *testing.T) {
+	act := &fakeActions{waiting: true}
+	m := settle(newTestModel(act), scanContacts(act))
+	if m.confirm == nil || !strings.Contains(m.confirm.prompt, "perplexity wants to talk to mac.orq") || len(act.calls) != 0 {
+		t.Fatalf("a contact must wait for y: %v %+v", act.calls, m.confirm)
+	}
+	drive(t, m, "y")
+	if strings.Join(act.calls, ";") != "contact c0ffee11 true" {
+		t.Fatalf("calls = %v", act.calls)
 	}
 }
 
@@ -254,18 +282,22 @@ func TestEnterOnAnUnjoinedCLICopiesItsJoinLine(t *testing.T) {
 	}
 }
 
-func TestAddWithAnExistingNameReconnectsOrRenames(t *testing.T) {
+func TestAddWithAnExistingNameAsksBeforeReplacingItsLink(t *testing.T) {
 	act := &fakeActions{}
 	m := drive(t, newTestModel(act), "right", "right", "n")
-	drive(t, m, append(splitKeys("perplexity"), "enter")...)
-	if strings.Join(act.calls, ";") != "open claude;pair perplexity" {
-		t.Fatalf("a live guest of that name must get a new code, calls = %v", act.calls)
+	m = drive(t, m, append(splitKeys("perplexity"), "enter")...)
+	if m.confirm == nil || len(act.calls) != 0 {
+		t.Fatalf("replacing a live guest's link must ask first: %v", act.calls)
+	}
+	drive(t, m, "y")
+	if strings.Join(act.calls, ";") != "new-link perplexity" {
+		t.Fatalf("calls = %v", act.calls)
 	}
 	act = &fakeActions{}
 	m = drive(t, newTestModel(act), "right", "right", "n")
-	m = drive(t, m, append(splitKeys("mac"), "enter")...)
-	if m.wizard == nil || m.wizard.name != "mac-2" {
-		t.Fatalf("a taken name must move to the next free one: %+v", m.wizard)
+	drive(t, m, append(splitKeys("mac"), "enter")...)
+	if strings.Join(act.calls, ";") != "add-web-guest mac-2" {
+		t.Fatalf("a taken name must move to the next free one: %v", act.calls)
 	}
 }
 
