@@ -131,7 +131,7 @@ func newTestModel(act Actions) Model {
 
 func TestRevokeWaitsForConfirmation(t *testing.T) {
 	act := &fakeActions{}
-	m := drive(t, newTestModel(act), "right", "right", "x")
+	m := drive(t, newTestModel(act), "right", "x")
 	if len(act.calls) != 0 || m.confirm == nil {
 		t.Fatalf("revoke ran before confirmation: %v", act.calls)
 	}
@@ -151,7 +151,7 @@ func TestRevokeWaitsForConfirmation(t *testing.T) {
 func TestGuestActionsReachTheStoreTheRowCameFrom(t *testing.T) {
 	act := &fakeActions{}
 	// Same name in both stores: after the waiting sign-in, relay first, then expose.
-	m := drive(t, newTestModel(act), "right", "right", "right", "down")
+	m := drive(t, newTestModel(act), "right", "right", "down")
 	m = drive(t, m, "a")
 	if m.confirm != nil || len(act.calls) != 0 {
 		t.Fatal("a relay guest has no approve step")
@@ -210,7 +210,7 @@ func TestAddAsksNameThenAgentsAndShowsTheCode(t *testing.T) {
 
 func TestSigninWaitsForConfirmation(t *testing.T) {
 	act := &fakeActions{}
-	m := drive(t, newTestModel(act), "right", "right", "right", "a")
+	m := drive(t, newTestModel(act), "right", "right", "a")
 	if len(act.calls) != 0 || m.confirm == nil || !strings.Contains(m.confirm.prompt, "claude.ai") || !strings.Contains(m.confirm.prompt, "0a1b2c3d") {
 		t.Fatalf("approval must name the host and wait for y: %v %+v", act.calls, m.confirm)
 	}
@@ -220,9 +220,11 @@ func TestSigninWaitsForConfirmation(t *testing.T) {
 	}
 }
 
-func TestEnterOnASessionCopiesItsJoinLine(t *testing.T) {
+func TestEnterOnAnUnjoinedCLICopiesItsJoinLine(t *testing.T) {
 	act := &fakeActions{}
-	drive(t, newTestModel(act), "right", "enter")
+	// Init's scan is what fills the list when watch opens.
+	m := settle(newTestModel(act), newTestModel(act).scan())
+	drive(t, m, "enter")
 	if len(act.calls) != 1 || !strings.Contains(act.calls[0], "agentnet join grok-011 --kind grok") {
 		t.Fatalf("calls = %v", act.calls)
 	}

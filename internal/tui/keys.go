@@ -142,7 +142,7 @@ func (m Model) onTableKey(key string) (tea.Model, tea.Cmd) {
 	case "u":
 		return m, m.reload()
 	case "enter":
-		if m.tab == tabSessions {
+		if m.tab == tabAgents {
 			return m.copyJoin(false)
 		}
 		if e, ok := m.selectedMessage(); ok && m.tab == tabMessages {
@@ -156,7 +156,7 @@ func (m Model) onTableKey(key string) (tea.Model, tea.Cmd) {
 
 func (m Model) onRowAction(key string) (tea.Model, tea.Cmd) {
 	switch m.tab {
-	case tabSessions:
+	case tabAgents:
 		if key == "e" {
 			return m.copyJoin(true)
 		}
@@ -222,7 +222,7 @@ func (m Model) switchTab(t tabID) (tea.Model, tea.Cmd) {
 	if (t == tabNodes || t == tabGuests) && !m.busy {
 		return m, tea.Batch(m.reload(), m.scan())
 	}
-	if t == tabSessions {
+	if t == tabAgents {
 		return m, m.scan()
 	}
 	return m, nil

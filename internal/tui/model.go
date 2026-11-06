@@ -60,7 +60,6 @@ type Model struct {
 	loaded   bool
 
 	sessions    []sessions.Session
-	sessionsErr error
 	signins     []relay.Signin
 	ticks       int
 	wizard      *wizard
@@ -127,7 +126,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.poll(), tick())
 	case sessionsMsg:
-		m.sessions, m.sessionsErr = msg.list, msg.err
+		if msg.err != nil {
+			m.setStatus("finding open CLIs: "+msg.err.Error(), true)
+		} else {
+			m.sessions = msg.list
+		}
 		m.clampCursors()
 	case signinsMsg:
 		m.onSignins(msg)
