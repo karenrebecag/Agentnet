@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/karenrebecag/agentnet/internal/core"
+	"github.com/karenrebecag/agentnet/internal/relay"
 )
 
 const (
@@ -237,7 +238,12 @@ func (e env) send(args []string) (int, error) {
 		fmt.Fprintf(e.stdout, "delivered %s -> %s\n", env.ID, env.To)
 		return ExitOK, nil
 	}
-	fmt.Fprintf(e.stderr, "queued %s -> %s (offline, delivered on next join/read)\n", env.ID, env.To)
+	// A remote address is not a local agent that will join. link forwards it.
+	note := "offline, delivered on next join/read"
+	if _, _, err := relay.ParseAddress(env.To); err == nil {
+		note = "via relay"
+	}
+	fmt.Fprintf(e.stderr, "queued %s -> %s (%s)\n", env.ID, env.To, note)
 	return ExitOffline, nil
 }
 

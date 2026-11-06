@@ -39,6 +39,30 @@ func TestAdminTokenPrintsOnce(t *testing.T) {
 	}
 }
 
+func TestSendToRelayAddressSaysViaRelay(t *testing.T) {
+	t.Setenv("AGENTNET_HOME", t.TempDir())
+	var stderr bytes.Buffer
+	code := Run([]string{"send", "probe.mcp", "--from", "e2e", "--message", "ping"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	if code != ExitOffline {
+		t.Fatalf("code %d %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "via relay") || strings.Contains(stderr.String(), "offline") {
+		t.Fatalf("stderr %s", stderr.String())
+	}
+}
+
+func TestSendToOfflineLocalStillSaysOffline(t *testing.T) {
+	t.Setenv("AGENTNET_HOME", t.TempDir())
+	var stderr bytes.Buffer
+	code := Run([]string{"send", "bob", "--from", "e2e", "--message", "ping"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	if code != ExitOffline {
+		t.Fatalf("code %d %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "offline, delivered on next join/read") {
+		t.Fatalf("stderr %s", stderr.String())
+	}
+}
+
 func TestLinkWithoutConfigFails(t *testing.T) {
 	t.Setenv("AGENTNET_HOME", t.TempDir())
 	code := Run([]string{"link"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
