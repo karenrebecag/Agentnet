@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-06
+
 ### Fixed
 
 - `link` reconnected about every second and a half: each poll gave the websocket read a deadline, and the library closes the connection when a read's context ends. Agents showed as offline to web guests and asks stayed queued. The read now outlives the poll.
