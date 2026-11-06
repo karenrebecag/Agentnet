@@ -9,11 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// errPairHost is a hostname check, not a relay response. IP addresses and URLs
+// are rejected so a pairing code cannot be bound to a redirect trick.
+var errPairHost = errors.New("pair host must be a hostname")
 
 // Node is one row of GET /v1/admin/nodes. The relay never returns token hashes.
 type Node struct {
@@ -50,10 +55,14 @@ func (c Client) http() *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: refuseRedirect}
 }
 
-func (c Client) Add(ctx context.Context, name, kind string, targets []string) (string, error) {
+func (c Client) Add(ctx context.Context, name, kind string, targets []string, inbox bool) (string, error) {
 	body := map[string]any{"name": name, "kind": kind}
 	if len(targets) > 0 {
 		body["targets"] = targets
+	}
+	// false is the relay default. Omitting it keeps an older worker from seeing a new field.
+	if inbox {
+		body["inbox"] = true
 	}
 	var out struct {
 		Token string `json:"token"`
@@ -140,7 +149,7 @@ func adminClient(home string) (Client, File, error) {
 	return Client{BaseURL: f.URL, Token: admin.Token}, f, nil
 }
 
-func checkNode(name, kind string, targets []string) error {
+func checkNode(name, kind string, targets []string, inbox bool) error {
 	if !nodeRE.MatchString(name) {
 		return fmt.Errorf("%w: %q", errBadAddress, name)
 	}
@@ -148,6 +157,9 @@ func checkNode(name, kind string, targets []string) error {
 	case "machine":
 		if len(targets) > 0 {
 			return errors.New("a machine node does not take --targets")
+		}
+		if inbox {
+			return errors.New("a machine node does not take --inbox")
 		}
 	case "guest":
 		if len(targets) == 0 {
@@ -164,17 +176,26 @@ func checkNode(name, kind string, targets []string) error {
 	return nil
 }
 
-// AddNode creates a node. When this machine has no node yet, the token is
-// saved into relay.json. A second machine must not clobber that file.
+// AddNode creates a node with inbox left off. When this machine has no node yet,
+// the token is saved into relay.json. A second machine must not clobber that file.
 func AddNode(ctx context.Context, home, name, kind string, targets []string) (token string, saved bool, err error) {
-	if err := checkNode(name, kind, targets); err != nil {
+	return addNode(ctx, home, name, kind, targets, false)
+}
+
+// AddNodeOpts is AddNode with an explicit inbox opt-in. Only a guest may set it.
+func AddNodeOpts(ctx context.Context, home, name, kind string, targets []string, inbox bool) (token string, saved bool, err error) {
+	return addNode(ctx, home, name, kind, targets, inbox)
+}
+
+func addNode(ctx context.Context, home, name, kind string, targets []string, inbox bool) (token string, saved bool, err error) {
+	if err := checkNode(name, kind, targets, inbox); err != nil {
 		return "", false, err
 	}
 	c, f, err := adminClient(home)
 	if err != nil {
 		return "", false, err
 	}
-	token, err = c.Add(ctx, name, kind, targets)
+	token, err = c.Add(ctx, name, kind, targets, inbox)
 	if err != nil {
 		return "", false, err
 	}
@@ -236,4 +257,128 @@ func RevokeNode(ctx context.Context, home, name string) error {
 		return Save(home, f)
 	}
 	return nil
+}
+
+// Pairing is a one-time code bound to a redirect host. Callers print it; nothing here stores it.
+type Pairing struct {
+	Code         string
+	Expires      string
+	ConnectorURL string
+}
+
+// PairNode asks the admin API for a pairing code. host is a hostname, not a URL.
+// The code is not written to disk.
+func PairNode(ctx context.Context, home, name, host string) (Pairing, error) {
+	host, err := normalizePairHost(host)
+	if err != nil {
+		return Pairing{}, err
+	}
+	if !nodeRE.MatchString(name) {
+		return Pairing{}, fmt.Errorf("%w: %q", errBadAddress, name)
+	}
+	c, _, err := adminClient(home)
+	if err != nil {
+		return Pairing{}, err
+	}
+	var out struct {
+		Code         string `json:"code"`
+		Expires      string `json:"expires"`
+		ConnectorURL string `json:"connector_url"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/v1/admin/nodes/"+url.PathEscape(name)+"/pair", map[string]string{"for": host}, &out); err != nil {
+		return Pairing{}, err
+	}
+	if !acceptableCode(out.Code) {
+		return Pairing{}, errors.New("relay pair returned no code")
+	}
+	return presentPairing(Pairing{Code: out.Code, Expires: out.Expires, ConnectorURL: out.ConnectorURL}), nil
+}
+
+func normalizePairHost(raw string) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 || strings.Contains(host, "..") {
+		return "", errPairHost
+	}
+	if strings.ContainsAny(host, "/:@?#\\*[] \t\r\n") {
+		return "", errPairHost
+	}
+	if net.ParseIP(host) != nil || numericPairHost(host) {
+		return "", errPairHost
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !pairLabelOK(label) {
+			return "", errPairHost
+		}
+	}
+	return host, nil
+}
+
+func numericPairHost(host string) bool {
+	if strings.HasPrefix(host, "0x") {
+		return true
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) == 1 {
+		return allDigits(labels[0])
+	}
+	if len(labels) != 4 {
+		return false
+	}
+	for _, label := range labels {
+		if !allDigits(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func pairLabelOK(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	for i, c := range label {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-' && i > 0 && i < len(label)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func acceptableCode(code string) bool {
+	if code == "" || len(code) > 64 {
+		return false
+	}
+	for _, r := range code {
+		if r <= ' ' || r >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func presentPairing(p Pairing) Pairing {
+	u, err := url.Parse(p.ConnectorURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Contains(p.ConnectorURL, p.Code) {
+		p.ConnectorURL = ""
+	}
+	if _, err := time.Parse(time.RFC3339, p.Expires); err != nil || strings.Contains(p.Expires, p.Code) {
+		p.Expires = ""
+	}
+	return p
 }

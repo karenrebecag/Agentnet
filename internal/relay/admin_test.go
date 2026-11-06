@@ -8,6 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,4 +140,173 @@ func TestAdminCleartextIsRejected(t *testing.T) {
 	if _, err := ListNodes(context.Background(), home); !errors.Is(err, errConfig) {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestPairRejectsBadHost(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	home := adminFixture(t, srv.URL)
+	bad := []string{
+		"",
+		"https://claude.ai",
+		"claude.ai/mcp",
+		"claude.ai?x=1",
+		"not-a-user" + "@" + "claude.example",
+		"127.0.0.1",
+		"::1",
+		"[::1]",
+		"*",
+		"*.claude.ai",
+		"claude.ai:443",
+		"1.2.3.4",
+		"127.000.000.001",
+		"2130706433",
+		"0x7f000001",
+		"localhost:1",
+	}
+	for _, host := range bad {
+		_, err := PairNode(context.Background(), home, "web", host)
+		if !errors.Is(err, errPairHost) {
+			t.Fatalf("host %q err = %v", host, err)
+		}
+	}
+	if posts != 0 {
+		t.Fatalf("posts %d", posts)
+	}
+}
+
+func TestPairCodeNotStored(t *testing.T) {
+	const code = "K7NP-4QDM"
+	const leak = "NEWLINESECRET"
+	var gotFor string
+	mode := "ok"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/admin/nodes/web/pair" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer admin-secret" {
+			http.Error(w, "auth", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			For string `json:"for"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		gotFor = body.For
+		w.WriteHeader(http.StatusCreated)
+		switch mode {
+		case "leak":
+			json.NewEncoder(w).Encode(map[string]string{"code": leak + "\nmore", "expires": "nope", "connector_url": "http://relay.example.test/mcp"})
+		case "clear":
+			json.NewEncoder(w).Encode(map[string]string{"code": code, "expires": "2026-11-06T18:10:00Z", "connector_url": "http://relay.example.test/mcp"})
+		default:
+			json.NewEncoder(w).Encode(map[string]string{
+				"code": code, "expires": "2026-11-06T18:10:00Z", "connector_url": "https://relay.example.test/mcp",
+			})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	home := adminFixture(t, srv.URL)
+	before, err := os.ReadFile(filepath.Join(home, "relay.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := PairNode(context.Background(), home, "web", "Claude.AI.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotFor != "claude.ai" || p.Code != code || p.ConnectorURL != "https://relay.example.test/mcp" || p.Expires != "2026-11-06T18:10:00Z" {
+		t.Fatalf("for %q pairing %+v", gotFor, p)
+	}
+	after, err := os.ReadFile(filepath.Join(home, "relay.json"))
+	if err != nil || string(after) != string(before) || dirHas(t, home, code) {
+		t.Fatal("pairing code touched disk")
+	}
+	mode = "leak"
+	_, err = PairNode(context.Background(), home, "web", "localhost")
+	if err == nil || strings.Contains(err.Error(), leak) || dirHas(t, home, leak) {
+		t.Fatalf("err = %v", err)
+	}
+	if gotFor != "localhost" {
+		t.Fatalf("for %q", gotFor)
+	}
+	mode = "clear"
+	p, err = PairNode(context.Background(), home, "web", "claude.ai")
+	if err != nil || p.Code != code || p.ConnectorURL != "" {
+		t.Fatalf("cleartext connector %+v %v", p, err)
+	}
+}
+
+func TestAddNodeOptsInbox(t *testing.T) {
+	var posts int
+	var saw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		saw = map[string]any{}
+		if err := json.NewDecoder(r.Body).Decode(&saw); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]string{"token": "an_issued"})
+	}))
+	t.Cleanup(srv.Close)
+	home := adminFixture(t, srv.URL)
+	ctx := context.Background()
+	if _, _, err := AddNodeOpts(ctx, home, "laptop", "machine", nil, true); err == nil || posts != 0 {
+		t.Fatalf("machine inbox posts=%d err=%v", posts, err)
+	}
+	if _, _, err := AddNodeOpts(ctx, home, "web", "guest", nil, true); err == nil || posts != 0 {
+		t.Fatalf("guest without targets posts=%d err=%v", posts, err)
+	}
+	if _, _, err := AddNodeOpts(ctx, home, "web", "guest", []string{"mac.claude"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 || saw["inbox"] != true {
+		t.Fatalf("posts %d body %+v", posts, saw)
+	}
+	posts = 0
+	saw = nil
+	if _, _, err := AddNodeOpts(ctx, home, "web", "guest", []string{"mac.claude"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := saw["inbox"]; ok || posts != 1 {
+		t.Fatalf("inbox key present posts=%d body %+v", posts, saw)
+	}
+}
+
+func adminFixture(t *testing.T, rawURL string) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := Save(home, File{URL: rawURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivate(adminPath(home), []byte("{\"token\":\"admin-secret\"}\n")); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+func dirHas(t *testing.T, root, needle string) bool {
+	t.Helper()
+	found := false
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if strings.Contains(string(b), needle) {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
