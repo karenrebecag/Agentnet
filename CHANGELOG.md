@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-05
+
 ### Fixed
 
 - `agentnet version` printed `dev` in release binaries, and release archives were named after the capitalized repository.
@@ -29,6 +31,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Inbox rotation past 1 MiB once fully read.
 - Protocol specification and integration guides.
 
-[Unreleased]: https://github.com/karenrebecag/agentnet/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/karenrebecag/agentnet/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/karenrebecag/agentnet/releases/tag/v0.2.1
 [0.2.0]: https://github.com/karenrebecag/agentnet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/karenrebecag/agentnet/releases/tag/v0.1.0
