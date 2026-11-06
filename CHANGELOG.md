@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-06
+
 ### Changed
 
 - `watch`: choosing an agent of this machine in `/add`, or pressing `e` on its row, opens that agent's live session to web guests. No rejoin with `--accept-external`; the opening ends with the session, so a later session under the same name starts closed.
