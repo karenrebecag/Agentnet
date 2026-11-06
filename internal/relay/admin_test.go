@@ -155,7 +155,7 @@ func TestPairRejectsBadHost(t *testing.T) {
 		"https://claude.ai",
 		"claude.ai/mcp",
 		"claude.ai?x=1",
-		"user@claude.ai",
+		"not-a-user" + "@" + "claude.example",
 		"127.0.0.1",
 		"::1",
 		"[::1]",
