@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { type SendResult, route } from "./route";
-import { type AgentInfo, type Env, type Envelope, AGENT_RE, Quota } from "./shared";
+import { type AgentInfo, type Env, type Envelope, AGENT_RE, randomHex } from "./shared";
 
 const MAX_QUEUE = 1000;
 const RETENTION_MS = 7 * 86_400_000;
@@ -8,6 +8,14 @@ const MAX_FRAME_BYTES = 80 * 1024;
 const MAX_AGENTS = 100;
 const POLL_MS = 250;
 const MAX_INFLIGHT_GUEST = 4;
+// One sender may hold at most a quarter of a recipient's queue, so a single
+// noisy or compromised peer cannot lock everyone else out of that inbox.
+const MAX_QUEUED_PER_SENDER = 250;
+// A lease outlives the longest MCP wait, so a dropped client frees its slot
+// without anyone calling leave().
+const LEASE_MS = 70_000;
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
 
 type QueueRow = {
   seq: number;
@@ -25,9 +33,6 @@ type ClientFrame =
  */
 export class Mailbox extends DurableObject<Env> {
   private sql: SqlStorage;
-  private sends = new Quota(60, 2000);
-  private asks = new Quota(10, 100);
-  private inflight = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -39,6 +44,21 @@ export class Mailbox extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS asks (
       id TEXT PRIMARY KEY, target TEXT NOT NULL, created INTEGER NOT NULL)`);
     this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+    // Quotas and in-flight slots live in storage: an evicted or hibernated
+    // object would otherwise start every counter from zero.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS hits (bucket TEXT NOT NULL, at INTEGER NOT NULL)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS hits_bucket ON hits (bucket, at)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS leases (id TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
+  }
+
+  private take(bucket: string, perMinute: number, perDay: number): boolean {
+    const at = Date.now();
+    this.sql.exec("DELETE FROM hits WHERE at <= ?", at - DAY_MS);
+    const count = (since: number) =>
+      this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM hits WHERE bucket = ? AND at > ?", bucket, since).toArray()[0].n;
+    if (count(at - MINUTE_MS) >= perMinute || count(at - DAY_MS) >= perDay) return false;
+    this.sql.exec("INSERT INTO hits (bucket, at) VALUES (?, ?)", bucket, at);
+    return true;
   }
 
   private meta(key: string): string | null {
@@ -92,6 +112,7 @@ export class Mailbox extends DurableObject<Env> {
     } catch {
       return this.fail(ws, "frame", "invalid JSON", true);
     }
+    if (typeof frame !== "object" || frame === null) return this.fail(ws, "frame", "expected a JSON object", true);
     const node = this.meta("node");
     if (!node) return this.fail(ws, "state", "unknown node", true);
 
@@ -125,7 +146,7 @@ export class Mailbox extends DurableObject<Env> {
   }
 
   private async send(node: string, frame: Extract<ClientFrame, { type: "send" }>): Promise<SendResult> {
-    if (!this.sends.take()) return { status: "rejected", error: "rate limit" };
+    if (!this.take("send", 60, 2000)) return { status: "rejected", error: "rate limit" };
     if (typeof frame.from !== "string" || !this.agents().some((a) => a.name === frame.from)) {
       return { status: "rejected", error: "from is not an announced agent of this node" };
     }
@@ -148,6 +169,8 @@ export class Mailbox extends DurableObject<Env> {
   async enqueue(envelope: Envelope): Promise<SendResult> {
     const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM queue").toArray()[0]?.n ?? 0;
     if (count >= MAX_QUEUE) return { status: "rejected", error: "recipient queue is full" };
+    const mine = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM queue WHERE sender = ?", envelope.from).toArray()[0]?.n ?? 0;
+    if (mine >= MAX_QUEUED_PER_SENDER) return { status: "rejected", error: "too many unread messages from this sender" };
     const env = JSON.stringify(envelope);
     this.sql.exec(
       "INSERT INTO queue (id, env, reply_to, sender, created) VALUES (?, ?, ?, ?, ?)",
@@ -168,21 +191,24 @@ export class Mailbox extends DurableObject<Env> {
     return this.ctx.getWebSockets().length > 0;
   }
 
-  /** Guest side: reserves an ask slot, or says why not. */
+  /** Guest side: charges one ask against the quota, or says why not. */
   async admitAsk(): Promise<string | null> {
-    if (this.inflight >= MAX_INFLIGHT_GUEST) return "too many requests in flight";
-    if (!this.asks.take()) return "rate limit";
-    return null;
+    return this.take("ask", 10, 100) ? null : "rate limit";
   }
 
-  async enter(): Promise<boolean> {
-    if (this.inflight >= MAX_INFLIGHT_GUEST) return false;
-    this.inflight++;
-    return true;
+  /** Takes an in-flight slot; returns its lease id, or null when all are busy. */
+  async enter(): Promise<string | null> {
+    const at = Date.now();
+    this.sql.exec("DELETE FROM leases WHERE expires <= ?", at);
+    const busy = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM leases").toArray()[0].n;
+    if (busy >= MAX_INFLIGHT_GUEST) return null;
+    const id = randomHex(8);
+    this.sql.exec("INSERT INTO leases (id, expires) VALUES (?, ?)", id, at + LEASE_MS);
+    return id;
   }
 
-  async leave(): Promise<void> {
-    this.inflight = Math.max(0, this.inflight - 1);
+  async leave(lease: string): Promise<void> {
+    this.sql.exec("DELETE FROM leases WHERE id = ?", lease);
   }
 
   async recordAsk(id: string, target: string): Promise<void> {
@@ -190,8 +216,19 @@ export class Mailbox extends DurableObject<Env> {
     await this.scheduleCleanup();
   }
 
-  async askedOf(id: string, from: string): Promise<boolean> {
-    return this.sql.exec("SELECT 1 FROM asks WHERE id = ? AND target = ?", id, from).toArray().length > 0;
+  async forgetAsk(id: string): Promise<void> {
+    this.sql.exec("DELETE FROM asks WHERE id = ?", id);
+  }
+
+  /**
+   * Machine side of a guest reply. The check and the insert run in one call on
+   * this object, so two racing replies cannot both pass: an ask gets one answer.
+   */
+  async enqueueReply(envelope: Envelope): Promise<SendResult> {
+    const asked = this.sql.exec("SELECT 1 FROM asks WHERE id = ? AND target = ?", envelope.reply_to ?? "", envelope.from).toArray().length > 0;
+    const answered = this.sql.exec("SELECT 1 FROM queue WHERE reply_to = ?", envelope.reply_to ?? "").toArray().length > 0;
+    if (!asked || answered) return { status: "rejected", error: "recipient not allowed" };
+    return this.enqueue(envelope);
   }
 
   async hasAsk(id: string): Promise<boolean> {

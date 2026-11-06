@@ -1,5 +1,5 @@
 import { route } from "./route";
-import { type Env, type NodeRecord, GUEST_AGENT, json, splitAddress } from "./shared";
+import { type Env, type NodeRecord, GUEST_AGENT, json, randomHex, splitAddress } from "./shared";
 
 // A minimal, stateless Streamable HTTP MCP server with JSON responses. It is
 // small enough to audit in one sitting, which matters more here than features.
@@ -7,6 +7,7 @@ import { type Env, type NodeRecord, GUEST_AGENT, json, splitAddress } from "./sh
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const DEFAULT_WAIT = 30;
 const MAX_WAIT = 50;
+const MAX_BODY = 32 * 1024;
 
 interface RpcRequest {
   jsonrpc: "2.0";
@@ -60,7 +61,8 @@ function toolResult(data: unknown, isError = false) {
 
 async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<string, unknown>) {
   const box = env.MAILBOX.getByName(guest.name);
-  if (!(await box.enter())) return toolResult("too many requests in flight, retry later", true);
+  const lease = await box.enter();
+  if (!lease) return toolResult("too many requests in flight, retry later", true);
   try {
     switch (name) {
       case "list_agents": {
@@ -80,9 +82,14 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
         if (typeof args.to !== "string" || typeof args.text !== "string") return toolResult("to and text are required", true);
         const refusal = await box.admitAsk();
         if (refusal) return toolResult(refusal, true);
-        const sent = await route(env, { sender: guest, fromAgent: GUEST_AGENT, to: args.to, text: args.text });
-        if (sent.status === "rejected") return toolResult(sent.error, true);
-        await box.recordAsk(sent.id, args.to);
+        // Recorded first: a fast agent can answer before route() returns.
+        const askId = randomHex(16);
+        await box.recordAsk(askId, args.to);
+        const sent = await route(env, { sender: guest, fromAgent: GUEST_AGENT, to: args.to, text: args.text, id: askId });
+        if (sent.status === "rejected") {
+          await box.forgetAsk(askId);
+          return toolResult(sent.error, true);
+        }
         const reply = await box.waitReply(sent.id, waitMs(args.wait_seconds));
         if (reply) return toolResult({ id: sent.id, status: "answered", reply: reply.text, from: reply.from });
         return toolResult({ id: sent.id, status: sent.status === "delivered" ? "waiting" : "queued" });
@@ -98,7 +105,7 @@ async function callTool(env: Env, guest: NodeRecord, name: string, args: Record<
         return null;
     }
   } finally {
-    await box.leave();
+    await box.leave(lease);
   }
 }
 
@@ -108,9 +115,12 @@ function rpcError(id: RpcRequest["id"], code: number, message: string) {
 
 export async function handleMcp(request: Request, env: Env, guest: NodeRecord): Promise<Response> {
   if (request.method !== "POST") return new Response("method not allowed", { status: 405, headers: { Allow: "POST" } });
+  if (Number(request.headers.get("Content-Length") ?? "0") > MAX_BODY) return json(rpcError(null, -32600, "body too large"), 413);
   let body: RpcRequest;
   try {
-    body = await request.json();
+    const raw = await request.text();
+    if (raw.length > MAX_BODY) return json(rpcError(null, -32600, "body too large"), 413);
+    body = JSON.parse(raw);
   } catch {
     return json(rpcError(null, -32700, "parse error"), 400);
   }
@@ -119,7 +129,8 @@ export async function handleMcp(request: Request, env: Env, guest: NodeRecord): 
   }
   if (body.id === undefined) return new Response(null, { status: 202 }); // notification
 
-  const { id, method, params = {} } = body;
+  const { id, method } = body;
+  const params = typeof body.params === "object" && body.params !== null ? body.params : {};
   switch (method) {
     case "initialize": {
       const asked = typeof params.protocolVersion === "string" ? params.protocolVersion : "";
@@ -141,7 +152,7 @@ export async function handleMcp(request: Request, env: Env, guest: NodeRecord): 
       return json({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
-      const args = (params.arguments ?? {}) as Record<string, unknown>;
+      const args = typeof params.arguments === "object" && params.arguments !== null ? (params.arguments as Record<string, unknown>) : {};
       const result = await callTool(env, guest, name, args);
       if (!result) return json(rpcError(id, -32602, `unknown tool ${name}`));
       return json({ jsonrpc: "2.0", id, result });

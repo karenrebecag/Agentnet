@@ -203,4 +203,37 @@ describe("guests", () => {
     const stolen = await tool(eve, "get_reply", { id: sent.structuredContent.id, wait_seconds: 0 });
     expect(stolen.isError).toBe(true);
   });
+
+  it("gets one reply per ask", async () => {
+    const m = unique("m");
+    const link = await connect(await addNode(m, "machine"));
+    await link.next("welcome");
+    link.send({ type: "hello", agents: [{ name: "a", kind: "claude", accept_external: true }] });
+    await new Promise((r) => setTimeout(r, 200));
+    const g = await addNode(unique("g"), "guest", [`${m}.a`]);
+    await tool(g, "ask", { to: `${m}.a`, text: "once", wait_seconds: 0 });
+    const ask = (await link.next("deliver")).envelope;
+    link.send({ type: "send", ref: "1", from: "a", to: ask.from, text: "first", reply_to: ask.id });
+    expect((await link.next("sent")).status).not.toBe("rejected");
+    link.send({ type: "send", ref: "2", from: "a", to: ask.from, text: "flood", reply_to: ask.id });
+    expect(await link.next("sent")).toMatchObject({ ref: "2", status: "rejected" });
+  });
+});
+
+describe("malformed input", () => {
+  it("answers null bodies and frames with errors instead of crashing", async () => {
+    expect((await adminCall("/v1/admin/nodes", null)).status).toBe(400);
+    const g = await addNode(unique("g"), "guest", ["x.y"]);
+    const res = await SELF.fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${g}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: null }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as any).error.code).toBe(-32602);
+    const link = await connect(await addNode(unique("m"), "machine"));
+    await link.next("welcome");
+    link.ws.send("null");
+    expect((await link.next("error")).code).toBe("frame");
+  });
 });

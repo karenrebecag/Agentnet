@@ -21,6 +21,8 @@ export interface SendRequest {
   to: string;
   text: string;
   replyTo?: string;
+  // Lets the caller record an ask under this id before the message can be answered.
+  id?: string;
 }
 
 function reject(error: string): SendResult {
@@ -51,13 +53,12 @@ export async function route(env: Env, req: SendRequest): Promise<SendResult> {
   if (target.kind === "guest") {
     // A guest only ever receives answers to its own asks, from the agent it asked.
     if (sender.kind !== "machine" || dest.agent !== GUEST_AGENT || !req.replyTo) return reject("recipient not allowed");
-    if (!(await box.askedOf(req.replyTo, from))) return reject("recipient not allowed");
   } else if (sender.kind === "guest") {
     const announced = target.agents.find((a) => a.name === dest.agent);
     if (!sender.targets.includes(req.to) || !announced?.accept_external) return reject("recipient not allowed");
   }
 
-  const envelope: Envelope = { id: randomHex(16), ts: now(), from, to: req.to, text, origin };
+  const envelope: Envelope = { id: req.id ?? randomHex(16), ts: now(), from, to: req.to, text, origin };
   if (req.replyTo) envelope.reply_to = req.replyTo;
-  return box.enqueue(envelope);
+  return target.kind === "guest" ? box.enqueueReply(envelope) : box.enqueue(envelope);
 }

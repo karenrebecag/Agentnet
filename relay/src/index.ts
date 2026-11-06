@@ -1,5 +1,5 @@
 import { handleMcp } from "./mcp";
-import { type Env, type NodeKind, type NodeRecord, bearer, json, sha256Hex, timingSafeEqual } from "./shared";
+import { type Env, type NodeKind, type NodeRecord, TOKEN_RE, bearer, json, sha256Hex, timingSafeEqual } from "./shared";
 
 export { Directory } from "./directory";
 export { Mailbox } from "./mailbox";
@@ -8,7 +8,9 @@ const MAX_ADMIN_BODY = 8 * 1024;
 
 async function authenticate(request: Request, env: Env, kind: NodeKind): Promise<NodeRecord | Response> {
   const token = bearer(request);
-  const node = token ? await env.DIRECTORY.getByName("directory").authenticate(await sha256Hex(token)) : null;
+  // Malformed tokens never reach the single Directory object, so junk floods
+  // cost it nothing.
+  const node = token && TOKEN_RE.test(token) ? await env.DIRECTORY.getByName("directory").authenticate(await sha256Hex(token)) : null;
   if (node && node.kind === kind) return node;
   return denied(request, env);
 }
@@ -24,7 +26,7 @@ async function denied(request: Request, env: Env): Promise<Response> {
 
 async function admin(request: Request, env: Env, path: string): Promise<Response> {
   const token = bearer(request);
-  if (!env.ADMIN_TOKEN || !token || !timingSafeEqual(token, env.ADMIN_TOKEN)) return denied(request, env);
+  if (!env.ADMIN_TOKEN || !token || !(await timingSafeEqual(token, env.ADMIN_TOKEN))) return denied(request, env);
   const directory = env.DIRECTORY.getByName("directory");
 
   if (path === "/v1/admin/nodes" && request.method === "GET") return json(await directory.list());
@@ -37,6 +39,7 @@ async function admin(request: Request, env: Env, path: string): Promise<Response
     } catch {
       return json({ error: "invalid JSON" }, 400);
     }
+    if (typeof body !== "object" || body === null) return json({ error: "expected a JSON object" }, 400);
     const targets = Array.isArray(body.targets) ? body.targets.filter((t): t is string => typeof t === "string") : [];
     const result = await directory.create(String(body.name ?? ""), body.kind as NodeKind, targets);
     return "error" in result ? json(result, 400) : json({ name: body.name, token: result.token }, 201);

@@ -59,7 +59,10 @@ export class Directory extends DurableObject<Env> {
   async authenticate(tokenHash: string): Promise<NodeRecord | null> {
     const rows = this.sql.exec<Row>("SELECT * FROM nodes WHERE hash = ? AND revoked = 0", tokenHash).toArray();
     if (rows.length === 0) return null;
-    this.sql.exec("UPDATE nodes SET last_seen = ? WHERE name = ?", now(), rows[0].name);
+    // At most one write a minute per node: every MCP call authenticates, and
+    // this object is shared by all of them.
+    const seen = rows[0].last_seen ? Date.parse(rows[0].last_seen) : 0;
+    if (Date.now() - seen > 60_000) this.sql.exec("UPDATE nodes SET last_seen = ? WHERE name = ?", now(), rows[0].name);
     return toRecord(rows[0]);
   }
 

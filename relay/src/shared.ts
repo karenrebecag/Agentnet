@@ -72,15 +72,17 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Compares two equal-length secrets without an early exit.
-export function timingSafeEqual(a: string, b: string): boolean {
-  const ea = new TextEncoder().encode(a);
-  const eb = new TextEncoder().encode(b);
-  if (ea.length !== eb.length) return false;
+// Hashing first makes both sides the same length, so not even the length of
+// the secret leaks through an early exit.
+export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+  const [ha, hb] = await Promise.all([sha256Hex(a), sha256Hex(b)]);
   let diff = 0;
-  for (let i = 0; i < ea.length; i++) diff |= ea[i] ^ eb[i];
+  for (let i = 0; i < ha.length; i++) diff |= ha.charCodeAt(i) ^ hb.charCodeAt(i);
   return diff === 0;
 }
+
+// Shape of every token newToken() issues: "an_" plus 32 bytes in base64url.
+export const TOKEN_RE = /^an_[A-Za-z0-9_-]{43}$/;
 
 export function bearer(request: Request): string | null {
   const header = request.headers.get("Authorization") ?? "";
@@ -94,20 +96,4 @@ export function json(body: unknown, status = 200): Response {
 
 export function now(): string {
   return new Date().toISOString();
-}
-
-/** A sliding one-minute and one-day counter kept in Durable Object memory. */
-export class Quota {
-  private minute: number[] = [];
-  private day: number[] = [];
-  constructor(private perMinute: number, private perDay: number) {}
-
-  take(at = Date.now()): boolean {
-    this.minute = this.minute.filter((t) => t > at - 60_000);
-    this.day = this.day.filter((t) => t > at - 86_400_000);
-    if (this.minute.length >= this.perMinute || this.day.length >= this.perDay) return false;
-    this.minute.push(at);
-    this.day.push(at);
-    return true;
-  }
 }
