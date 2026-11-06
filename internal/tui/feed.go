@@ -18,6 +18,7 @@ type AgentRow struct {
 	Name, Kind     string
 	Live, External bool
 	Unread         int
+	PID            int
 }
 
 type Snapshot struct {
@@ -47,7 +48,7 @@ func (f *Feed) Poll(now time.Time) (Snapshot, error) {
 	}
 	for _, a := range agents {
 		snap.Agents = append(snap.Agents, AgentRow{
-			Name: a.Name, Kind: a.Kind, Live: a.Live, External: a.AcceptExternal, Unread: f.Store.Unread(a.Name),
+			Name: a.Name, Kind: a.Kind, Live: a.Live, External: a.AcceptExternal, Unread: f.Store.Unread(a.Name), PID: a.PID,
 		})
 	}
 	names, err := f.Store.Inboxes()

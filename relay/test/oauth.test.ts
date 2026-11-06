@@ -5,6 +5,8 @@ const ADMIN = "test-admin-token";
 const BASE = "https://relay.test";
 const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 let counter = 0;
+// The OAuth routes are rate limited per address; each test speaks from its own.
+const ip = () => ({ "CF-Connecting-IP": `192.0.2.${counter % 250}` });
 const unique = (p: string) => `${p}${++counter}${Math.random().toString(36).slice(2, 6)}`;
 
 async function admin(path: string, body?: unknown) {
@@ -22,8 +24,8 @@ async function guest(targets: string[], inbox = false) {
   return { name, token: ((await res.json()) as { token: string }).token };
 }
 
-async function pair(name: string, host: string): Promise<string> {
-  const res = await admin(`/v1/admin/nodes/${name}/pair`, { for: host });
+async function pair(name: string, host = ""): Promise<string> {
+  const res = await admin(`/v1/admin/nodes/${name}/pair`, host ? { for: host } : {});
   expect(res.status).toBe(201);
   return ((await res.json()) as { code: string }).code;
 }
@@ -31,7 +33,7 @@ async function pair(name: string, host: string): Promise<string> {
 async function registerClient(redirect = CLAUDE_CB): Promise<string> {
   const res = await SELF.fetch(`${BASE}/oauth/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...ip() },
     body: JSON.stringify({ client_name: "Test client", redirect_uris: [redirect] }),
   });
   expect(res.status).toBe(201);
@@ -53,7 +55,7 @@ async function consent(clientId: string, challenge: string, redirect = CLAUDE_CB
     response_type: "code", client_id: clientId, redirect_uri: redirect, code_challenge: challenge,
     code_challenge_method: "S256", state: "st4te", resource: `${BASE}/mcp`,
   });
-  const res = await SELF.fetch(`${BASE}/oauth/authorize?${q}`);
+  const res = await SELF.fetch(`${BASE}/oauth/authorize?${q}`, { headers: ip() });
   expect(res.status).toBe(200);
   const html = await res.text();
   return /name="request" value="(req_[^"]+)"/.exec(html)![1];
@@ -71,7 +73,7 @@ async function submit(request: string, code: string, origin = BASE, ip = `198.51
 async function tokenCall(params: Record<string, string>) {
   return SELF.fetch(`${BASE}/oauth/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", ...ip() },
     body: new URLSearchParams(params).toString(),
   });
 }
@@ -203,6 +205,57 @@ describe("sign-in", () => {
     expect((await tools(s.access_token)).status).toBe(401);
     const r = await tokenCall({ grant_type: "refresh_token", refresh_token: s.refresh_token, client_id: s.clientId });
     expect(((await r.json()) as any).error).toBe("invalid_grant");
+  });
+});
+
+describe("client names", () => {
+  it("drops control characters a client puts in its name", async () => {
+    const res = await SELF.fetch(`${BASE}/oauth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...ip() },
+      body: JSON.stringify({ client_name: "Claude\u001b[2K\r\nclaude.ai\tok", redirect_uris: [CLAUDE_CB] }),
+    });
+    expect(((await res.json()) as { client_name: string }).client_name).toBe("Claude[2Kclaude.aiok");
+  });
+});
+
+describe("sign-in with a code that names no host", () => {
+  async function waiting(guestName: string) {
+    const clientId = await registerClient();
+    const { verifier, challenge } = await pkce();
+    const res = await submit(await consent(clientId, challenge), await pair(guestName));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    const poll = /wait=(anw_[^"]+)"/.exec(html)![1];
+    const listed = (await (await admin("/v1/admin/signins")).json()) as { id: string; host: string; guest: string }[];
+    const mine = listed.find((s) => s.guest === guestName)!;
+    expect(mine.host).toBe("claude.ai");
+    const again = () => SELF.fetch(`${BASE}/oauth/authorize?wait=${poll}`, { redirect: "manual", headers: ip() });
+    return { clientId, verifier, id: mine.id, again };
+  }
+
+  it("holds the client until the person approves the host on their machine", async () => {
+    const g = await guest(["m.claude"]);
+    const w = await waiting(g.name);
+    expect((await w.again()).status).toBe(200);
+    expect((await admin(`/v1/admin/signins/${w.id}/approve`, {})).status).toBe(200);
+    const back = await w.again();
+    expect(back.status).toBe(303);
+    const tok = await tokenCall({
+      grant_type: "authorization_code", code: new URL(back.headers.get("Location")!).searchParams.get("code")!,
+      redirect_uri: CLAUDE_CB, client_id: w.clientId, code_verifier: w.verifier,
+    });
+    expect((await tools(((await tok.json()) as { access_token: string }).access_token)).status).toBe(200);
+    // The page cannot be replayed into a second code.
+    expect((await w.again()).status).toBe(400);
+  });
+
+  it("sends the client away with access_denied when the person says no", async () => {
+    const g = await guest(["m.claude"]);
+    const w = await waiting(g.name);
+    await admin(`/v1/admin/signins/${w.id}/deny`, {});
+    const back = await w.again();
+    expect(new URL(back.headers.get("Location")!).searchParams.get("error")).toBe("access_denied");
   });
 });
 

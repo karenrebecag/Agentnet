@@ -14,13 +14,14 @@ type tabID int
 
 const (
 	tabAgents tabID = iota
+	tabSessions
 	tabNodes
 	tabGuests
 	tabMessages
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Agents", "Nodes", "Guests", "Messages"}
+var tabNames = [tabCount]string{"Agents", "Sessions", "Nodes", "Guests", "Messages"}
 
 // cell is one table value: plain text for width and filtering, a style to draw it.
 type cell struct {
@@ -57,6 +58,19 @@ func (m Model) table(tab tabID) table {
 			}
 			t.add(a.Name, c(a.Name, name), state, c(a.Kind, text), unread, ext)
 		}
+	case tabSessions:
+		t.head = []string{"Session", "Tool", "State", "Network", "Terminal"}
+		for _, s := range m.sessions {
+			network := c("not joined", dim)
+			if s.Agent != "" {
+				network = c("as "+s.Agent, up)
+			}
+			state := c(s.State, text)
+			if s.State == "busy" {
+				state = c("busy", warn)
+			}
+			t.add(fmt.Sprint(s.PID), c(s.Name, name), c(s.Tool, text), state, network, c(s.TTY, dim))
+		}
 	case tabNodes:
 		t.head = []string{"Name", "State", "Last seen", "Agents"}
 		for _, n := range m.nodes {
@@ -76,6 +90,9 @@ func (m Model) table(tab tabID) table {
 		}
 	case tabGuests:
 		t.head = []string{"Name", "Via", "State", "Can ask"}
+		for _, s := range m.signins {
+			t.add("signin/"+s.ID, c(s.Guest, name), c("sign-in", text), c("waiting "+s.ID, warn), c("from "+s.Host+" · says it is "+s.ClientName, warn))
+		}
 		for _, g := range m.guests {
 			t.add(string(g.Via)+"/"+g.Name, c(g.Name, name), c(string(g.Via), text), c(g.State, guestStyle(g.State)), c(strings.Join(g.Targets, ", "), text))
 		}

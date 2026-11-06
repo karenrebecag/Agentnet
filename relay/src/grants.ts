@@ -19,6 +19,9 @@ export const MAX_REQUESTS = 1000;
 export const GRANT_MAX_MS = 90 * 86_400_000;
 // Wrong pairing codes are counted per address, in a window that forgets.
 export const FAILURE_WINDOW_MS = 15 * 60_000;
+// A code with no host waits for a yes on the person's machine this long.
+export const SIGNIN_TTL_MS = 10 * 60_000;
+export const MAX_SIGNINS = 50;
 // Used refresh tokens are kept only to catch a replay; a few per grant is enough.
 export const USED_REFRESH_KEPT = 5;
 
@@ -58,6 +61,10 @@ export function schema(sql: SqlStorage): void {
     hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL, kind TEXT NOT NULL, expires INTEGER NOT NULL,
     used INTEGER NOT NULL DEFAULT 0)`);
   sql.exec("CREATE INDEX IF NOT EXISTS tokens_grant ON tokens (grant_id)");
+  sql.exec(`CREATE TABLE IF NOT EXISTS signins (
+    id TEXT PRIMARY KEY, poll TEXT NOT NULL UNIQUE, guest TEXT NOT NULL, client TEXT NOT NULL, client_name TEXT NOT NULL,
+    redirect TEXT NOT NULL, challenge TEXT NOT NULL, state TEXT NOT NULL, scope TEXT NOT NULL, host TEXT NOT NULL,
+    ip TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'waiting', created INTEGER NOT NULL, expires INTEGER NOT NULL)`);
 }
 
 export function newPairCode(): string {
@@ -118,6 +125,7 @@ export function dropGrant(sql: SqlStorage, grantId: string): void {
 // registered clients that only ever signed in as this guest.
 export function dropGuest(sql: SqlStorage, guest: string): void {
   sql.exec("DELETE FROM pairings WHERE guest = ?", guest);
+  sql.exec("DELETE FROM signins WHERE guest = ?", guest);
   const grants = sql.exec<{ id: string; client: string }>("SELECT id, client FROM grants WHERE guest = ?", guest).toArray();
   for (const g of grants) {
     dropGrant(sql, g.id);
@@ -132,12 +140,13 @@ export function sweep(sql: SqlStorage): number {
   sql.exec("DELETE FROM requests WHERE expires < ?", t);
   sql.exec("DELETE FROM failures WHERE at < ?", t - FAILURE_WINDOW_MS);
   sql.exec("DELETE FROM codes WHERE expires < ?", t);
+  sql.exec("DELETE FROM signins WHERE expires < ?", t);
   sql.exec("DELETE FROM tokens WHERE expires < ?", t);
   sql.exec("DELETE FROM grants WHERE id NOT IN (SELECT DISTINCT grant_id FROM tokens) AND created < ?", t - CODE_TTL_MS);
   sql.exec("DELETE FROM clients WHERE kind = 'dcr' AND used = 0 AND created < ?", t - UNUSED_CLIENT_TTL_MS);
   sql.exec("DELETE FROM clients WHERE kind = 'cimd' AND used = 0 AND fetched < ?", t - CIMD_CACHE_MS);
   return sql.exec<{ n: number }>(
-    "SELECT (SELECT COUNT(*) FROM pairings) + (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM clients) AS n",
+    "SELECT (SELECT COUNT(*) FROM pairings) + (SELECT COUNT(*) FROM tokens) + (SELECT COUNT(*) FROM clients) + (SELECT COUNT(*) FROM signins) AS n",
   ).toArray()[0].n;
 }
 

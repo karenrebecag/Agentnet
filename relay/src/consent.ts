@@ -1,3 +1,5 @@
+import type { Signin } from "./directory";
+
 // The only HTML the relay serves. No script runs on it, it cannot be framed,
 // and its form can only post back to this host.
 
@@ -37,8 +39,8 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-function page(title: string, body: string, status = 200, redirectOrigin = ""): Response {
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+function page(title: string, body: string, status = 200, redirectOrigin = "", head = ""): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${head}
 <title>${esc(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
   return new Response(html, { status, headers: headers(redirectOrigin) });
 }
@@ -62,13 +64,28 @@ export function consentPage(v: ConsentView): Response {
   <div><span class="k">returns to</span> <span class="host">${esc(redirect.host)}</span>${esc(redirect.pathname)}</div>
   ${loopback ? `<p class="warn">This client returns to a program on this computer. Any local program can claim that address: continue only if you started this sign-in yourself.</p>` : ""}
 </div>
-<p>Enter the pairing code from <code>agentnet relay node pair &lt;guest&gt; --for ${esc(redirect.hostname)}</code>. The code decides which guest this client becomes and which agents it may ask.</p>
+<p>Enter the pairing code from <code>agentnet watch</code> or <code>agentnet relay node pair &lt;guest&gt;</code>. The code decides which guest this client becomes and which agents it may ask.</p>
 ${v.message ? `<p class="warn">${esc(v.message)}</p>` : ""}
 <form method="post" action="/oauth/authorize">
   <input type="hidden" name="request" value="${esc(v.request)}">
   <p><input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="XXXX-XXXX" autofocus></p>
   <p><button class="primary" type="submit" name="action" value="approve">Allow</button><button type="submit" name="action" value="deny">Deny</button></p>
 </form>`, 200, redirect.origin);
+}
+
+// Reloading needs no script, so the page keeps its no-JS policy.
+export function waitingPage(poll: string, s: Signin): Response {
+  return page("agentnet: waiting for approval", `
+<h1>Approve this sign-in on your computer</h1>
+<div class="box">
+  <div><span class="k">sign-in</span> ${esc(s.id)}</div>
+  <div><span class="k">client</span> ${esc(s.client_name)}</div>
+  <div><span class="k">returns to</span> <span class="host">${esc(s.host)}</span></div>
+  <div><span class="k">as guest</span> ${esc(s.guest)}</div>
+</div>
+<p>Open <code>agentnet watch</code>, tab Guests, and approve <strong>${esc(s.id)}</strong>, or run <code>agentnet relay signins approve ${esc(s.id)}</code>. Approve only if the host above is the client you are signing in to.</p>
+<p class="k">This page checks again every few seconds.</p>`, 200, "",
+    `<meta http-equiv="refresh" content="4;url=/oauth/authorize?wait=${encodeURIComponent(poll)}">`);
 }
 
 export function errorPage(message: string, status: number): Response {

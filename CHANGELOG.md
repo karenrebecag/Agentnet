@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `watch`: a Sessions tab lists the agent CLIs open on this machine (Claude Code, Grok, Codex, Gemini, ...) and which of them are in the network. Enter copies a join line to paste into that session, the same for every CLI; `e` copies one that also accepts web guests.
+- `watch`: `/add` connects a web AI in two answers, a name and the agents it can talk to, and shows the connector URL and the code. `/pair <guest>` makes a new code.
+- Relay: a pairing code without `--for` is bound by its first use, and the client waits until the person approves the host it returns to, in `watch` or with `relay signins approve <id>`.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

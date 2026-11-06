@@ -28,7 +28,10 @@ func TestPreview(t *testing.T) {
 	next, _ := m.Update(pollMsg{snap: snap})
 	next, _ = next.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
 	os.Stdout.WriteString(next.View() + "\n\n")
-	guestsTab := drive(t, next.(Model), "right", "right", "/")
-	guestsTab = drive(t, guestsTab, splitKeys("guest relay gemini mac.")...)
-	os.Stdout.WriteString(guestsTab.View() + "\n")
+	sessionsTab := drive(t, next.(Model), "right")
+	os.Stdout.WriteString(sessionsTab.View() + "\n\n")
+	guestsTab := drive(t, sessionsTab, "right", "right")
+	os.Stdout.WriteString(guestsTab.View() + "\n\n")
+	wizard := drive(t, guestsTab, append(append(splitKeys("n"), splitKeys("claude-web")...), "enter", "m")...)
+	os.Stdout.WriteString(wizard.View() + "\n")
 }

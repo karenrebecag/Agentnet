@@ -1,5 +1,5 @@
 import type { ClientRecord } from "./directory";
-import { consentPage, errorPage } from "./consent";
+import { consentPage, errorPage, waitingPage } from "./consent";
 import { type Env, json } from "./shared";
 
 // The relay is its own OAuth 2.1 authorization server for guests that sign in
@@ -11,6 +11,13 @@ const MAX_BODY = 8 * 1024;
 const MAX_METADATA = 16 * 1024;
 const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const CHALLENGE_RE = /^[A-Za-z0-9_-]{43}$/;
+
+// A client names itself; the name reaches terminals, so control and format
+// characters that could redraw what the approver reads are dropped.
+function cleanName(raw: unknown, fallback: string): string {
+  const name = typeof raw === "string" ? raw.replace(/[\p{C}]/gu, "").trim().slice(0, 80) : "";
+  return name || fallback;
+}
 
 const noStore = { "Cache-Control": "no-store", Pragma: "no-cache" };
 
@@ -127,7 +134,7 @@ async function fetchMetadataDocument(id: string): Promise<ClientRecord | string>
   const redirects = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.filter((r): r is string => typeof r === "string" && validRedirect(r)) : [];
   if (redirects.length === 0) return "client metadata document has no usable redirect_uris";
   if (doc.token_endpoint_auth_method !== undefined && doc.token_endpoint_auth_method !== "none") return "only public clients are supported";
-  const name = typeof doc.client_name === "string" ? doc.client_name.slice(0, 80) : host;
+  const name = cleanName(doc.client_name, host);
   return { id, kind: "cimd", name, redirects };
 }
 
@@ -177,7 +184,7 @@ export async function register(request: Request, env: Env): Promise<Response> {
   if (body.token_endpoint_auth_method !== undefined && body.token_endpoint_auth_method !== "none") {
     return json({ error: "invalid_client_metadata", error_description: "only token_endpoint_auth_method none is supported" }, 400);
   }
-  const name = typeof body.client_name === "string" ? body.client_name.slice(0, 80) : new URL(redirects[0]).host;
+  const name = cleanName(body.client_name, new URL(redirects[0]).host);
   const result = await env.DIRECTORY.getByName("directory").register(name, redirects, clientIp(request));
   if ("error" in result) return json({ error: "temporarily_unavailable", error_description: result.error }, 429);
   return json({
@@ -195,6 +202,8 @@ export async function register(request: Request, env: Env): Promise<Response> {
 
 export async function authorizeGet(request: Request, env: Env, origin: string): Promise<Response> {
   const p = new URL(request.url).searchParams;
+  const wait = p.get("wait");
+  if (wait !== null) return pollWaiting(env, wait);
   const clientId = p.get("client_id") ?? "";
   const redirect = p.get("redirect_uri") ?? "";
   const client = clientId ? await resolveClient(env, clientId) : "client_id is required";
@@ -229,11 +238,22 @@ export async function authorizePost(request: Request, env: Env): Promise<Respons
   const before = await directory.peekRequest(id);
   const result = await directory.approve(id, String(form.get("code") ?? "").slice(0, 32), clientIp(request));
   if ("redirect" in result) return Response.redirect(result.redirect, 303);
+  if ("waiting" in result) return pollWaiting(env, result.waiting);
   if ("retry" in result && before) {
     const client = await directory.client(before.client);
     return consentPage({ request: result.retry, client: client?.name ?? before.client, clientId: before.client, redirect: before.redirect, message: result.message });
   }
   return errorPage("description" in result ? result.description : "sign-in failed", 400);
+}
+
+// The browser reloads this until the person answers on their machine; only
+// then does the client get a code.
+async function pollWaiting(env: Env, poll: string): Promise<Response> {
+  if (!poll.startsWith("anw_") || poll.length > 128) return errorPage("this sign-in page is not valid; start again from the client", 400);
+  const result = await env.DIRECTORY.getByName("directory").pollSignin(poll);
+  if ("redirect" in result) return Response.redirect(result.redirect, 303);
+  if ("waiting" in result) return waitingPage(poll, result.waiting);
+  return errorPage(result.description, 400);
 }
 
 // ---- token ----

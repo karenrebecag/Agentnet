@@ -151,7 +151,6 @@ func TestPairRejectsBadHost(t *testing.T) {
 	t.Cleanup(srv.Close)
 	home := adminFixture(t, srv.URL)
 	bad := []string{
-		"",
 		"https://claude.ai",
 		"claude.ai/mcp",
 		"claude.ai?x=1",
